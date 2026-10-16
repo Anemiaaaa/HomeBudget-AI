@@ -1,0 +1,81 @@
+package agent
+
+type Definition struct {
+	Type     string             `json:"type"`
+	Function FunctionDefinition `json:"function"`
+}
+
+type FunctionDefinition struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+func Definitions() []Definition {
+	category := map[string]any{"type": "string", "enum": []string{"food", "transport", "housing", "entertainment", "health", "shopping", "other"}}
+	identifier := map[string]any{"type": "string", "pattern": `^[1-9][0-9]*$`}
+	money := map[string]any{"type": "string", "pattern": `^(0|[1-9][0-9]*)(\.[0-9]{1,2})?$`}
+	date := map[string]any{"type": "string", "description": "YYYY-MM-DD; create/update also accept Russian relative dates"}
+
+	return []Definition{
+		function("create_expense", "Create one expense for the authenticated owner", object(
+			map[string]any{"amount": money, "category": category, "spent_at": date, "comment": map[string]any{"type": "string", "maxLength": 500}},
+			"amount", "category", "spent_at",
+		)),
+		function("list_expenses", "Read only the authenticated owner's expenses before answering or changing them", object(
+			map[string]any{
+				"expense_id": identifier, "category": category, "date_from": date, "date_to": date,
+				"query":  map[string]any{"type": "string", "maxLength": 200},
+				"order":  map[string]any{"type": "string", "enum": []string{"spent_at_desc", "created_at_desc"}},
+				"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
+				"offset": map[string]any{"type": "integer", "minimum": 0},
+			},
+		)),
+		function("summarize_expenses", "Calculate an exact total over all matching expenses for the authenticated owner", object(
+			map[string]any{
+				"category": category, "date_from": date, "date_to": date,
+				"query": map[string]any{"type": "string", "maxLength": 200},
+			},
+		)),
+		function("update_expense", "Update one expense that was read in this turn", object(
+			map[string]any{
+				"expense_id": identifier, "expected_version": identifier,
+				"expected_old_amount": money,
+				"patch": object(map[string]any{
+					"amount": money, "category": category, "spent_at": date,
+					"comment": map[string]any{"type": []string{"string", "null"}, "maxLength": 500},
+				}),
+			},
+			"expense_id", "expected_version", "patch",
+		)),
+		function("delete_expense", "Prepare confirmation for deleting one expense that was read in this turn; does not delete immediately", object(
+			map[string]any{"expense_id": identifier, "expected_version": identifier},
+			"expense_id", "expected_version",
+		)),
+		function("ask_clarification", "Save a structured pending question when the request is incomplete or ambiguous", object(
+			map[string]any{
+				"kind":          map[string]any{"type": "string", "enum": []string{"clarify_create", "clarify_request", "choose_target"}},
+				"question":      map[string]any{"type": "string", "minLength": 1, "maxLength": 500},
+				"draft":         map[string]any{"type": "object"},
+				"candidate_ids": map[string]any{"type": "array", "maxItems": 5, "items": identifier},
+			},
+			"kind", "question",
+		)),
+	}
+}
+
+func function(name, description string, parameters map[string]any) Definition {
+	return Definition{Type: "function", Function: FunctionDefinition{Name: name, Description: description, Parameters: parameters}}
+}
+
+func object(properties map[string]any, required ...string) map[string]any {
+	result := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties":           properties,
+	}
+	if len(required) > 0 {
+		result["required"] = required
+	}
+	return result
+}

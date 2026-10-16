@@ -240,6 +240,12 @@ func validateFilter(filter *ListFilter) error {
 	if filter.Offset < 0 {
 		return validation("offset", "must not be negative")
 	}
+	if filter.Order == "" {
+		filter.Order = OrderSpentAtDesc
+	}
+	if filter.Order != OrderSpentAtDesc && filter.Order != OrderCreatedAtDesc {
+		return validation("order", "must be spent_at_desc or created_at_desc")
+	}
 	return validateSummaryFilter(filter)
 }
 

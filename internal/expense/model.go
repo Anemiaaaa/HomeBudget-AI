@@ -102,12 +102,20 @@ type Scope struct {
 	OwnerID *int64
 }
 
+type ListOrder string
+
+const (
+	OrderSpentAtDesc   ListOrder = "spent_at_desc"
+	OrderCreatedAtDesc ListOrder = "created_at_desc"
+)
+
 type ListFilter struct {
 	UserID   *int64
 	Category *Category
 	DateFrom *Date
 	DateTo   *Date
 	Query    string
+	Order    ListOrder
 	Limit    int
 	Offset   int
 }

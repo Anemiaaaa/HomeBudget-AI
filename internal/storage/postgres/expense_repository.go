@@ -63,8 +63,12 @@ func (r *ExpenseRepository) List(ctx context.Context, filter expense.ListFilter)
 		return expense.ListResult{}, fmt.Errorf("count expenses: %w", err)
 	}
 	listArguments := append(append([]any{}, arguments...), filter.Limit, filter.Offset)
-	query := fmt.Sprintf(`SELECT %s FROM expenses WHERE %s ORDER BY spent_at DESC, id DESC LIMIT $%d OFFSET $%d`,
-		expenseColumns, where, len(listArguments)-1, len(listArguments))
+	orderBy := "spent_at DESC, id DESC"
+	if filter.Order == expense.OrderCreatedAtDesc {
+		orderBy = "created_at DESC, id DESC"
+	}
+	query := fmt.Sprintf(`SELECT %s FROM expenses WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
+		expenseColumns, where, orderBy, len(listArguments)-1, len(listArguments))
 	rows, err := r.pool.Query(ctx, query, listArguments...)
 	if err != nil {
 		return expense.ListResult{}, fmt.Errorf("list expenses: %w", err)
