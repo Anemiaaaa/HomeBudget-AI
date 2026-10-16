@@ -8,6 +8,7 @@ import (
 
 	"github.com/Anemiaaaa/HomeBudget-AI/internal/expense"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -15,37 +16,37 @@ import (
 const expenseColumns = `id, user_id, amount::text, category, spent_at::text, comment,
        created_at, updated_at, version`
 
-type ExpenseRepository struct{ pool *pgxpool.Pool }
-
-func NewExpenseRepository(pool *pgxpool.Pool) *ExpenseRepository {
-	return &ExpenseRepository{pool: pool}
+type database interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+type ExpenseRepository struct{ db database }
+
+func NewExpenseRepository(pool *pgxpool.Pool) *ExpenseRepository {
+	return &ExpenseRepository{db: pool}
+}
+
+func NewExpenseRepositoryTx(tx pgx.Tx) *ExpenseRepository { return &ExpenseRepository{db: tx} }
+
 func (r *ExpenseRepository) Create(ctx context.Context, input expense.NewExpense) (expense.Expense, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return expense.Expense{}, fmt.Errorf("begin create expense: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := ensureUser(ctx, tx, input.UserID); err != nil {
+	if err := ensureUser(ctx, r.db, input.UserID); err != nil {
 		return expense.Expense{}, err
 	}
-	row := tx.QueryRow(ctx, `INSERT INTO expenses (user_id, amount, category, spent_at, comment)
+	row := r.db.QueryRow(ctx, `INSERT INTO expenses (user_id, amount, category, spent_at, comment)
 		VALUES ($1, $2::numeric, $3, $4::date, $5) RETURNING `+expenseColumns,
 		input.UserID, input.Amount.String(), input.Category, input.SpentAt.String(), input.Comment)
 	created, err := scanExpense(row)
 	if err != nil {
 		return expense.Expense{}, fmt.Errorf("insert expense: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return expense.Expense{}, fmt.Errorf("commit create expense: %w", err)
-	}
 	return created, nil
 }
 
 func (r *ExpenseRepository) Get(ctx context.Context, scope expense.Scope, id int64) (expense.Expense, error) {
 	conditions, arguments := scopeConditions(scope, id)
-	item, err := scanExpense(r.pool.QueryRow(ctx, `SELECT `+expenseColumns+` FROM expenses WHERE `+strings.Join(conditions, " AND "), arguments...))
+	item, err := scanExpense(r.db.QueryRow(ctx, `SELECT `+expenseColumns+` FROM expenses WHERE `+strings.Join(conditions, " AND "), arguments...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return expense.Expense{}, expense.ErrNotFound
 	}
@@ -59,7 +60,7 @@ func (r *ExpenseRepository) List(ctx context.Context, filter expense.ListFilter)
 	conditions, arguments := filterConditions(filter)
 	where := strings.Join(conditions, " AND ")
 	var total int64
-	if err := r.pool.QueryRow(ctx, "SELECT count(*) FROM expenses WHERE "+where, arguments...).Scan(&total); err != nil {
+	if err := r.db.QueryRow(ctx, "SELECT count(*) FROM expenses WHERE "+where, arguments...).Scan(&total); err != nil {
 		return expense.ListResult{}, fmt.Errorf("count expenses: %w", err)
 	}
 	listArguments := append(append([]any{}, arguments...), filter.Limit, filter.Offset)
@@ -69,7 +70,7 @@ func (r *ExpenseRepository) List(ctx context.Context, filter expense.ListFilter)
 	}
 	query := fmt.Sprintf(`SELECT %s FROM expenses WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`,
 		expenseColumns, where, orderBy, len(listArguments)-1, len(listArguments))
-	rows, err := r.pool.Query(ctx, query, listArguments...)
+	rows, err := r.db.Query(ctx, query, listArguments...)
 	if err != nil {
 		return expense.ListResult{}, fmt.Errorf("list expenses: %w", err)
 	}
@@ -90,7 +91,7 @@ func (r *ExpenseRepository) List(ctx context.Context, filter expense.ListFilter)
 
 func (r *ExpenseRepository) Summary(ctx context.Context, filter expense.ListFilter) (expense.Summary, error) {
 	conditions, arguments := filterConditions(filter)
-	rows, err := r.pool.Query(ctx, `SELECT category, coalesce(sum(amount), 0)::text, count(*)
+	rows, err := r.db.Query(ctx, `SELECT category, coalesce(sum(amount), 0)::text, count(*)
 		FROM expenses WHERE `+strings.Join(conditions, " AND ")+` GROUP BY category ORDER BY category`, arguments...)
 	if err != nil {
 		return expense.Summary{}, fmt.Errorf("summarize expenses: %w", err)
@@ -124,13 +125,8 @@ func (r *ExpenseRepository) Summary(ctx context.Context, filter expense.ListFilt
 }
 
 func (r *ExpenseRepository) Update(ctx context.Context, scope expense.Scope, id int64, command expense.UpdateCommand) (expense.Expense, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return expense.Expense{}, fmt.Errorf("begin update expense: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	if command.UserID.Set {
-		if err := ensureUser(ctx, tx, command.UserID.Value); err != nil {
+		if err := ensureUser(ctx, r.db, command.UserID.Value); err != nil {
 			return expense.Expense{}, err
 		}
 	}
@@ -162,15 +158,12 @@ func (r *ExpenseRepository) Update(ctx context.Context, scope expense.Scope, id 
 		arguments = append(arguments, *scope.OwnerID)
 		where += fmt.Sprintf(" AND user_id = $%d", len(arguments))
 	}
-	updated, err := scanExpense(tx.QueryRow(ctx, `UPDATE expenses SET `+strings.Join(sets, ", ")+` WHERE `+where+` RETURNING `+expenseColumns, arguments...))
+	updated, err := scanExpense(r.db.QueryRow(ctx, `UPDATE expenses SET `+strings.Join(sets, ", ")+` WHERE `+where+` RETURNING `+expenseColumns, arguments...))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return expense.Expense{}, classifyVersionMiss(ctx, tx, scope, id)
+		return expense.Expense{}, classifyVersionMiss(ctx, r.db, scope, id)
 	}
 	if err != nil {
 		return expense.Expense{}, fmt.Errorf("update expense: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return expense.Expense{}, fmt.Errorf("commit update expense: %w", err)
 	}
 	return updated, nil
 }
@@ -182,18 +175,18 @@ func (r *ExpenseRepository) Delete(ctx context.Context, scope expense.Scope, id,
 		arguments = append(arguments, *scope.OwnerID)
 		where += " AND user_id = $3"
 	}
-	tag, err := r.pool.Exec(ctx, "DELETE FROM expenses WHERE "+where, arguments...)
+	tag, err := r.db.Exec(ctx, "DELETE FROM expenses WHERE "+where, arguments...)
 	if err != nil {
 		return fmt.Errorf("delete expense: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return classifyVersionMiss(ctx, r.pool, scope, id)
+		return classifyVersionMiss(ctx, r.db, scope, id)
 	}
 	return nil
 }
 
 func (r *ExpenseRepository) ListUsers(ctx context.Context) ([]expense.User, error) {
-	rows, err := r.pool.Query(ctx, "SELECT id, display_name, created_at FROM users ORDER BY coalesce(display_name, ''), id")
+	rows, err := r.db.Query(ctx, "SELECT id, display_name, created_at FROM users ORDER BY coalesce(display_name, ''), id")
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -213,8 +206,8 @@ func (r *ExpenseRepository) ListUsers(ctx context.Context) ([]expense.User, erro
 	return users, rows.Err()
 }
 
-func ensureUser(ctx context.Context, tx pgx.Tx, userID int64) error {
-	if _, err := tx.Exec(ctx, "INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING", userID); err != nil {
+func ensureUser(ctx context.Context, db database, userID int64) error {
+	if _, err := db.Exec(ctx, "INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING", userID); err != nil {
 		return fmt.Errorf("ensure expense owner: %w", err)
 	}
 	return nil
