@@ -1,0 +1,97 @@
+# HomeBudget AI
+
+Сервис учёта семейных расходов из тестового задания. Сейчас реализована рабочая административная веб-панель с REST API; Telegram-бот и агент добавляются следующими этапами по [SDD](SDD.md). Исходные требования сохранены в [task.md](task.md).
+
+## Что уже работает
+
+- полный CRUD расходов через веб-панель и `/api/v1`;
+- фильтры по владельцу, категории, периоду и тексту комментария;
+- общая сумма и разбиение по категориям, рассчитанные в PostgreSQL;
+- owner-scoped сервис для будущего Telegram-бота: чужая запись выглядит как отсутствующая;
+- защита редактирования и удаления через версию записи (`409 version_conflict`);
+- точные денежные значения без `float64`, календарные даты в `APP_TIMEZONE`;
+- автоматические versioned-миграции, readiness/liveness endpoints;
+- Docker Compose и сохранение PostgreSQL в named volume;
+- отдельные smoke-клиенты Telegram `getMe` и OpenAI-compatible tool calling.
+
+## Быстрый запуск
+
+Требуется Docker с Compose:
+
+```bash
+docker compose up --build
+```
+
+Откройте [http://localhost:8080](http://localhost:8080). Панель позволяет ввести новый Telegram ID, поэтому заранее создавать пользователя не нужно.
+
+Проверка процесса и базы:
+
+```bash
+curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
+```
+
+PostgreSQL хранит данные в named volume `expenses_data`. Обычный `docker compose down` сохраняет данные; `docker compose down -v` удаляет локальную базу.
+
+## REST API
+
+Основные маршруты:
+
+- `GET /api/v1/meta`, `GET /api/v1/users`;
+- `GET /api/v1/expenses` и `GET /api/v1/expenses/summary`;
+- `GET`, `PATCH`, `DELETE /api/v1/expenses/{id}`;
+- `POST /api/v1/expenses`.
+
+Доступны параметры `user_id`, `category`, `date_from`, `date_to`, `query`, а для списка — `limit` и `offset`. ID, версии и суммы передаются строками, чтобы не терять точность на JSON-границах. PATCH и DELETE требуют актуальный `expected_version`.
+
+Полный контракт доступен в [OpenAPI](docs/openapi.yaml), а решения по безопасности описаны в [SDD](SDD.md#6-rest-api).
+
+## Конфигурация
+
+Для веб CRUD дополнительных секретов не требуется. Скопируйте `.env.example` в `.env`, когда понадобится проверить внешние интеграции:
+
+- `TELEGRAM_BOT_TOKEN` — токен отдельного тестового бота;
+- `LLM_BASE_URL` — базовый URL OpenAI-compatible API;
+- `LLM_MODEL` — модель с tool calling;
+- `LLM_API_KEY` — ключ провайдера, если endpoint его требует;
+- `FAMILY_USER_IDS` — необязательный CSV разрешённых Telegram ID.
+
+Секреты из `.env` исключены из Git.
+
+## Проверки
+
+Unit-тесты и статическая проверка Go:
+
+```bash
+docker run --rm -v "${PWD}:/src" -w /src golang:1.25-alpine go test ./...
+docker run --rm -v "${PWD}:/src" -w /src golang:1.25-alpine go vet ./...
+```
+
+Сборка веб-панели:
+
+```bash
+docker run --rm -v "${PWD}/web:/app" -w /app node:24-alpine npm ci
+docker run --rm -v "${PWD}/web:/app" -w /app node:24-alpine npm run build
+```
+
+После запуска Compose интеграционный тест PostgreSQL выполняется внутри его сети:
+
+```bash
+docker run --rm --network test-task-expenses_default -e TEST_DATABASE_URL="postgres://expenses:expenses@db:5432/expenses?sslmode=disable" -v "${PWD}:/src" -w /src golang:1.25-alpine go test -tags integration ./internal/storage/postgres
+```
+
+Smoke-команда внешних интеграций не пишет в базу и не отправляет сообщения:
+
+```bash
+docker compose run --rm --entrypoint /usr/local/bin/smoke app -telegram -llm
+```
+
+## Архитектурные решения
+
+Денежные значения хранятся в Go как целые копейки, в PostgreSQL — `NUMERIC(12,2)`. `spent_at` — календарная дата. Административный сервис доступен только REST-адаптеру, а Telegram получит отдельный owner-scoped сервис, который принудительно подставляет ID владельца на каждой операции.
+
+Веб-панель намеренно работает без авторизации: это ограничение сформулировано в тестовом задании. Поэтому Compose публикует её только на `127.0.0.1`; для публичного размещения потребуется аутентификация и TLS.
+
+## Использование ИИ
+
+ИИ-ассистент помогал разбирать требования, проектировать SDD, находить граничные сценарии и писать часть реализации. Все предложенные изменения проверяются компилятором, тестами, статическим анализом, сборкой контейнеров и ручными сквозными сценариями; секреты и реальные сообщения в запросы не передаются.

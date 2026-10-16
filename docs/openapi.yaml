@@ -1,0 +1,292 @@
+openapi: 3.1.0
+info:
+  title: HomeBudget Admin API
+  version: 1.0.0
+  description: Административный REST API тестового задания. ID, версии и суммы передаются строками.
+  license:
+    name: Proprietary test assignment
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: /api/v1
+security: []
+paths:
+  /meta:
+    get:
+      operationId: getMeta
+      summary: Метаданные формы
+      responses:
+        "200":
+          description: Категории, валюта, часовой пояс и текущая дата
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Meta"
+  /users:
+    get:
+      operationId: listUsers
+      summary: Известные владельцы расходов
+      responses:
+        "200":
+          description: Список владельцев
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/User" }
+  /expenses:
+    get:
+      operationId: listExpenses
+      summary: Список расходов
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+        - $ref: "#/components/parameters/Category"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Query"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Страница расходов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExpenseList"
+        "422": { $ref: "#/components/responses/ValidationError" }
+    post:
+      operationId: createExpense
+      summary: Создать расход
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExpense"
+      responses:
+        "201":
+          description: Расход создан
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Expense" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /expenses/summary:
+    get:
+      operationId: summarizeExpenses
+      summary: Итоги по всему фильтру
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+        - $ref: "#/components/parameters/Category"
+        - $ref: "#/components/parameters/DateFrom"
+        - $ref: "#/components/parameters/DateTo"
+        - $ref: "#/components/parameters/Query"
+      responses:
+        "200":
+          description: Сумма, количество и разбиение по категориям
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Summary" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /expenses/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ExpenseID"
+    get:
+      operationId: getExpense
+      summary: Получить расход
+      responses:
+        "200":
+          description: Расход
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Expense" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateExpense
+      summary: Частично изменить расход
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateExpense" }
+      responses:
+        "200":
+          description: Новая версия расхода
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Expense" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/VersionConflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      operationId: deleteExpense
+      summary: Удалить актуальную версию расхода
+      parameters:
+        - name: expected_version
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/PositiveID" }
+      responses:
+        "204": { description: Расход удалён }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/VersionConflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+components:
+  parameters:
+    ExpenseID:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/PositiveID" }
+    UserID:
+      name: user_id
+      in: query
+      schema: { $ref: "#/components/schemas/PositiveID" }
+    Category:
+      name: category
+      in: query
+      schema: { $ref: "#/components/schemas/Category" }
+    DateFrom:
+      name: date_from
+      in: query
+      schema: { type: string, format: date }
+    DateTo:
+      name: date_to
+      in: query
+      schema: { type: string, format: date }
+    Query:
+      name: query
+      in: query
+      schema: { type: string, maxLength: 200 }
+  schemas:
+    PositiveID:
+      type: string
+      pattern: "^[1-9][0-9]*$"
+    Money:
+      type: string
+      pattern: "^(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$"
+      examples: ["350.00"]
+    Category:
+      type: string
+      enum: [food, transport, housing, entertainment, health, shopping, other]
+    Expense:
+      type: object
+      required: [id, user_id, amount, category, spent_at, comment, created_at, updated_at, version]
+      properties:
+        id: { $ref: "#/components/schemas/PositiveID" }
+        user_id: { $ref: "#/components/schemas/PositiveID" }
+        amount: { $ref: "#/components/schemas/Money" }
+        category: { $ref: "#/components/schemas/Category" }
+        spent_at: { type: string, format: date }
+        comment: { type: [string, "null"], maxLength: 500 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        version: { $ref: "#/components/schemas/PositiveID" }
+    CreateExpense:
+      type: object
+      additionalProperties: false
+      required: [user_id, amount, category, spent_at]
+      properties:
+        user_id: { $ref: "#/components/schemas/PositiveID" }
+        amount: { $ref: "#/components/schemas/Money" }
+        category: { $ref: "#/components/schemas/Category" }
+        spent_at:
+          type: string
+          description: YYYY-MM-DD, «сегодня» или «вчера»
+        comment: { type: [string, "null"], maxLength: 500 }
+    UpdateExpense:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version: { $ref: "#/components/schemas/PositiveID" }
+        user_id: { $ref: "#/components/schemas/PositiveID" }
+        amount: { $ref: "#/components/schemas/Money" }
+        category: { $ref: "#/components/schemas/Category" }
+        spent_at: { type: string }
+        comment: { type: [string, "null"], maxLength: 500 }
+    ExpenseList:
+      type: object
+      required: [items, total_count, limit, offset]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Expense" } }
+        total_count: { type: integer, minimum: 0 }
+        limit: { type: integer }
+        offset: { type: integer }
+    Summary:
+      type: object
+      required: [total_amount, count, by_category]
+      properties:
+        total_amount: { $ref: "#/components/schemas/Money" }
+        count: { type: integer, minimum: 0 }
+        by_category:
+          type: array
+          items:
+            type: object
+            required: [category, amount, count]
+            properties:
+              category: { $ref: "#/components/schemas/Category" }
+              amount: { $ref: "#/components/schemas/Money" }
+              count: { type: integer, minimum: 0 }
+    User:
+      type: object
+      required: [id, display_name, created_at]
+      properties:
+        id: { $ref: "#/components/schemas/PositiveID" }
+        display_name: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+    Meta:
+      type: object
+      required: [categories, currency, timezone, today]
+      properties:
+        categories:
+          type: array
+          items:
+            type: object
+            required: [code, label]
+            properties:
+              code: { $ref: "#/components/schemas/Category" }
+              label: { type: string }
+        currency: { const: RUB }
+        timezone: { type: string }
+        today: { type: string, format: date }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            fields: { type: object, additionalProperties: { type: string } }
+            request_id: { type: string }
+  responses:
+    InvalidRequest:
+      description: Некорректный JSON или неизвестное поле
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    ValidationError:
+      description: Недопустимые значения
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Расход не найден
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    VersionConflict:
+      description: Версия расхода устарела
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    TooLarge:
+      description: Тело запроса больше 16 KiB
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }

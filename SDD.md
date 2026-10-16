@@ -455,7 +455,7 @@ web/src/                       # React + TypeScript
 evals/cases/                    # сценарии и синтетические данные
 evals/reports/                  # результаты без секретов
 docs/openapi.yaml              # API-контракт, создаётся при реализации
-docs/AI_USAGE.md                # как использовался ИИ и что проверено
+README.md                       # запуск, проверки и краткая прозрачность об использовании ИИ
 Dockerfile
 compose.yaml
 .env.example
