@@ -122,6 +122,14 @@ func TestBotRepositoryDurableInboxAndAtomicCompletion(t *testing.T) {
 	if err != nil || stored.Status != bot.StatusDelivered || stored.ReplyText == nil || !json.Valid(stored.Result) {
 		t.Fatalf("Get(completed) = %+v, %v", stored, err)
 	}
+	history, err := repository.LoadHistory(ctx, userID, chatID, 102, 6)
+	if err != nil || len(history) != 1 || history[0].UserText != text || history[0].AssistantText != "Добавлено: кофе — 350,00 ₽" {
+		t.Fatalf("LoadHistory() = %+v, %v", history, err)
+	}
+	otherHistory, err := repository.LoadHistory(ctx, 202, chatID, 102, 6)
+	if err != nil || len(otherHistory) != 0 {
+		t.Fatalf("LoadHistory(other owner) = %+v, %v", otherHistory, err)
+	}
 
 	rollbackMessageID, rollbackText := int64(12), "чай 100"
 	rollbackUpdate := bot.IncomingUpdate{

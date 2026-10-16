@@ -285,6 +285,36 @@ func (r *BotRepository) Get(ctx context.Context, updateID int64) (bot.Update, er
 	return result, nil
 }
 
+func (r *BotRepository) LoadHistory(ctx context.Context, userID, chatID, beforeUpdateID int64, limit int) ([]bot.HistoryPair, error) {
+	if userID <= 0 || chatID == 0 || beforeUpdateID <= 0 || limit < 1 || limit > 6 {
+		return nil, errors.New("invalid bot history query")
+	}
+	rows, err := r.pool.Query(ctx, `SELECT text, reply_text FROM bot_updates
+		WHERE user_id = $1 AND chat_id = $2 AND update_id < $3
+		  AND status IN ('ready_to_send', 'delivery_failed', 'delivered')
+		  AND text IS NOT NULL AND reply_text IS NOT NULL
+		ORDER BY update_id DESC LIMIT $4`, userID, chatID, beforeUpdateID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("load bot history: %w", err)
+	}
+	defer rows.Close()
+	history := make([]bot.HistoryPair, 0, limit)
+	for rows.Next() {
+		var pair bot.HistoryPair
+		if err := rows.Scan(&pair.UserText, &pair.AssistantText); err != nil {
+			return nil, fmt.Errorf("scan bot history: %w", err)
+		}
+		history = append(history, pair)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate bot history: %w", err)
+	}
+	for left, right := 0, len(history)-1; left < right; left, right = left+1, right-1 {
+		history[left], history[right] = history[right], history[left]
+	}
+	return history, nil
+}
+
 type Session struct {
 	PendingAction json.RawMessage
 	ExpiresAt     *time.Time

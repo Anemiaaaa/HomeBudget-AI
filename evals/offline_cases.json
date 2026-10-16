@@ -1,0 +1,164 @@
+[
+  {
+    "id": "E01",
+    "steps": [
+      {
+        "input": "кофе 350",
+        "responses": [{"tools": [{"id": "create", "name": "create_expense", "arguments": {"amount": "350", "category": "food", "spent_at": "сегодня", "comment": "кофе"}}]}],
+        "total_count": 1,
+        "reply_contains": ["Добавлено", "350,00 ₽"]
+      }
+    ],
+    "owner_expenses": [{"amount": "350.00", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"}]
+  },
+  {
+    "id": "E04",
+    "steps": [
+      {
+        "input": "кофе",
+        "responses": [{"tools": [{"id": "clarify", "name": "ask_clarification", "arguments": {"kind": "clarify_create", "question": "Какая сумма?", "draft": {"category": "food", "spent_at": "сегодня", "comment": "кофе"}}}]}],
+        "total_count": 0,
+        "reply_contains": ["Какая сумма?"]
+      },
+      {
+        "input": "350",
+        "responses": [{"tools": [{"id": "create", "name": "create_expense", "arguments": {"amount": "350", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"}}]}],
+        "total_count": 1,
+        "reply_contains": ["Добавлено", "350,00 ₽"]
+      }
+    ],
+    "owner_expenses": [{"amount": "350.00", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"}]
+  },
+  {
+    "id": "E06",
+    "initial": [
+      {"owner_id": 101, "amount": "350", "category": "food", "spent_at": "2026-10-10", "comment": "обед"},
+      {"owner_id": 101, "amount": "1200", "category": "transport", "spent_at": "2026-10-12", "comment": "такси"},
+      {"owner_id": 202, "amount": "9999", "category": "food", "spent_at": "2026-10-11", "comment": "чужое"}
+    ],
+    "steps": [
+      {
+        "input": "сколько потратил на еду в этом месяце",
+        "responses": [
+          {"tools": [{"id": "summary", "name": "summarize_expenses", "arguments": {"category": "food", "date_from": "2026-10-01", "date_to": "2026-10-15"}}]},
+          {"content": "готово"}
+        ],
+        "total_count": 3,
+        "reply_contains": ["350,00 ₽", "операций: 1"],
+        "reply_excludes": ["9999", "чужое"]
+      }
+    ],
+    "owner_expenses": [
+      {"amount": "350.00", "category": "food", "spent_at": "2026-10-10", "comment": "обед"},
+      {"amount": "1200.00", "category": "transport", "spent_at": "2026-10-12", "comment": "такси"}
+    ]
+  },
+  {
+    "id": "E08",
+    "initial": [{"owner_id": 101, "amount": "350", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"}],
+    "steps": [
+      {
+        "input": "последнее было не 350, а 450",
+        "responses": [
+          {"tools": [{"id": "read", "name": "list_expenses", "arguments": {"order": "created_at_desc", "limit": 1}}]},
+          {"tools": [{"id": "update", "name": "update_expense", "arguments": {"expense_id": "1", "expected_version": "1", "expected_old_amount": "350", "patch": {"amount": "450"}}}]}
+        ],
+        "total_count": 1,
+        "reply_contains": ["Обновлено", "450,00 ₽"]
+      }
+    ],
+    "owner_expenses": [{"amount": "450.00", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"}]
+  },
+  {
+    "id": "E11",
+    "initial": [{"owner_id": 101, "amount": "1200", "category": "transport", "spent_at": "2026-10-14", "comment": "такси"}],
+    "steps": [
+      {
+        "input": "удали такси",
+        "responses": [
+          {"tools": [{"id": "read", "name": "list_expenses", "arguments": {"query": "такси"}}]},
+          {"tools": [{"id": "delete", "name": "delete_expense", "arguments": {"expense_id": "1", "expected_version": "1"}}]}
+        ],
+        "total_count": 1,
+        "reply_contains": ["Удалить", "1200,00 ₽"]
+      },
+      {
+        "input": "да, удали",
+        "total_count": 0,
+        "reply_contains": ["удалён"]
+      }
+    ],
+    "owner_expenses": []
+  },
+  {
+    "id": "E13",
+    "initial": [
+      {"owner_id": 101, "amount": "350", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"},
+      {"owner_id": 202, "amount": "9999", "category": "other", "spent_at": "2026-10-15", "comment": "чужой секрет"}
+    ],
+    "steps": [
+      {
+        "input": "покажи расход номер 2",
+        "responses": [
+          {"tools": [{"id": "foreign", "name": "list_expenses", "arguments": {"expense_id": "2"}}]},
+          {"content": "не найдено"}
+        ],
+        "total_count": 2,
+        "reply_contains": ["Уточните"],
+        "reply_excludes": ["9999", "секрет"]
+      }
+    ],
+    "owner_expenses": [{"amount": "350.00", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"}]
+  },
+  {
+    "id": "E20",
+    "steps": [
+      {
+        "input": "покажи расходы",
+        "responses": [{"tools": [
+          {"id": "r1", "name": "list_expenses", "arguments": {}},
+          {"id": "r2", "name": "list_expenses", "arguments": {}},
+          {"id": "r3", "name": "list_expenses", "arguments": {}},
+          {"id": "r4", "name": "list_expenses", "arguments": {}},
+          {"id": "r5", "name": "list_expenses", "arguments": {}},
+          {"id": "r6", "name": "list_expenses", "arguments": {}},
+          {"id": "r7", "name": "list_expenses", "arguments": {}}
+        ]}],
+        "total_count": 0,
+        "reply_contains": ["слишком сложный"]
+      }
+    ],
+    "owner_expenses": []
+  },
+  {
+    "id": "E21",
+    "steps": [
+      {
+        "input": "кофе 100 и такси 200",
+        "responses": [{"tools": [
+          {"id": "c1", "name": "create_expense", "arguments": {"amount": "100", "category": "food", "spent_at": "сегодня", "comment": "кофе"}},
+          {"id": "c2", "name": "create_expense", "arguments": {"amount": "200", "category": "transport", "spent_at": "сегодня", "comment": "такси"}}
+        ]}],
+        "total_count": 0,
+        "reply_contains": ["только один расход"]
+      }
+    ],
+    "owner_expenses": []
+  },
+  {
+    "id": "E26",
+    "steps": [
+      {
+        "input": "сколько потратил",
+        "responses": [
+          {"tools": [{"id": "summary", "name": "summarize_expenses", "arguments": {}}]},
+          {"content": "выдуманный ответ"}
+        ],
+        "total_count": 0,
+        "reply_contains": ["0,00 ₽", "операций: 0"],
+        "reply_excludes": ["выдуманный"]
+      }
+    ],
+    "owner_expenses": []
+  }
+]

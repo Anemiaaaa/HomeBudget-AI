@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Anemiaaaa/HomeBudget-AI/internal/agent"
+	"github.com/Anemiaaaa/HomeBudget-AI/internal/llm"
 )
 
 func TestSelectedCandidateUsesSavedOrder(t *testing.T) {
@@ -29,6 +30,28 @@ func TestSelectedCandidateUsesSavedOrder(t *testing.T) {
 	}
 	if _, ok := selectedCandidate("последнее", candidates); ok {
 		t.Fatal("unsupported selection must not choose a candidate")
+	}
+}
+
+func TestTrimHistoryDropsOldestPairsOnly(t *testing.T) {
+	t.Parallel()
+	definitions := agent.Definitions()
+	messages := []llm.Message{
+		{Role: "system", Content: "rules"},
+		{Role: "user", Content: strings.Repeat("old", 200)},
+		{Role: "assistant", Content: strings.Repeat("reply", 200)},
+		{Role: "user", Content: "recent"},
+		{Role: "assistant", Content: "recent reply"},
+		{Role: "user", Content: "current"},
+	}
+	afterOne := append(append([]llm.Message{}, messages[:1]...), messages[3:]...)
+	limit := (contextSize(messages, definitions) + contextSize(afterOne, definitions)) / 2
+	trimmed, count := trimHistoryToFit(messages, 4, definitions, limit)
+	if count != 2 || len(trimmed) != 4 {
+		t.Fatalf("trimmed messages = %+v, history count = %d", trimmed, count)
+	}
+	if trimmed[1].Content != "recent" || trimmed[len(trimmed)-1].Content != "current" {
+		t.Fatalf("wrong messages survived trimming: %+v", trimmed)
 	}
 }
 

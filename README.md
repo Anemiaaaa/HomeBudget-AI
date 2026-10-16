@@ -18,6 +18,8 @@
 - атомарное сохранение мутации и готового ответа, отдельные повторы доставки;
 - подтверждение удаления серверным кодом без повторного вызова модели.
 - восстановление незавершённого уточнения после рестарта и TTL для устаревшего состояния.
+- выбор одной записи из нескольких по сохранённому порядку без повторного вызова модели;
+- до шести предыдущих пар диалога с автоматическим сокращением контекста.
 
 ## Быстрый запуск
 
@@ -85,6 +87,12 @@ docker run --rm -v "${PWD}/web:/app" -w /app node:24-alpine npm run build
 
 ```bash
 docker run --rm --network test-task-expenses_default -e TEST_DATABASE_URL="postgres://expenses:expenses@db:5432/expenses?sslmode=disable" -v "${PWD}:/src" -w /src golang:1.25-alpine go test -p 1 -tags integration ./internal/storage/postgres ./internal/appbot
+```
+
+Отдельный offline eval использует scripted provider и не расходует токены внешней модели. Девять фиксированных сценариев находятся в `evals/offline_cases.json`:
+
+```bash
+docker run --rm --network test-task-expenses_default -e TEST_DATABASE_URL="postgres://expenses:expenses@db:5432/expenses?sslmode=disable" -v "${PWD}:/src" -w /src golang:1.25-alpine go test -p 1 -tags integration ./internal/appbot -run TestOfflineAgentEval -v
 ```
 
 Smoke-команда внешних интеграций не пишет в базу и не отправляет сообщения:

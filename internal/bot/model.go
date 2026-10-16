@@ -47,3 +47,8 @@ type Delivery struct {
 	Text     string
 	Attempts int
 }
+
+type HistoryPair struct {
+	UserText      string
+	AssistantText string
+}
