@@ -15,7 +15,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got.HTTPAddr != ":8080" || got.LLMTimeout != 30*time.Second {
+	if got.HTTPAddr != ":8080" || got.LLMTimeout != 30*time.Second || got.AgentMaxLLMCalls != 4 || got.AgentMaxToolCalls != 6 || got.AgentMaxContextBytes != 32<<10 || got.AgentTurnTimeout != time.Minute {
 		t.Fatalf("unexpected defaults: %+v", got)
 	}
 	if len(got.FamilyUserIDs) != 2 {

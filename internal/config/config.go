@@ -10,19 +10,23 @@ import (
 )
 
 type Config struct {
-	DatabaseURL      string
-	HTTPAddr         string
-	WebDir           string
-	Timezone         string
-	Location         *time.Location
-	LogLevel         string
-	BotEnabled       bool
-	TelegramBotToken string
-	FamilyUserIDs    map[int64]struct{}
-	LLMBaseURL       string
-	LLMModel         string
-	LLMAPIKey        string
-	LLMTimeout       time.Duration
+	DatabaseURL          string
+	HTTPAddr             string
+	WebDir               string
+	Timezone             string
+	Location             *time.Location
+	LogLevel             string
+	BotEnabled           bool
+	TelegramBotToken     string
+	FamilyUserIDs        map[int64]struct{}
+	LLMBaseURL           string
+	LLMModel             string
+	LLMAPIKey            string
+	LLMTimeout           time.Duration
+	AgentMaxLLMCalls     int
+	AgentMaxToolCalls    int
+	AgentMaxContextBytes int
+	AgentTurnTimeout     time.Duration
 }
 
 func Load() (Config, error) {
@@ -44,6 +48,22 @@ func Load() (Config, error) {
 	if llmTimeout <= 0 {
 		return Config{}, errors.New("LLM_TIMEOUT must be positive")
 	}
+	agentTurnTimeout, err := durationEnv("AGENT_TURN_TIMEOUT", time.Minute)
+	if err != nil || agentTurnTimeout <= 0 {
+		return Config{}, errors.New("AGENT_TURN_TIMEOUT must be a positive duration")
+	}
+	agentMaxLLMCalls, err := intEnv("AGENT_MAX_LLM_CALLS", 4, 1, 8)
+	if err != nil {
+		return Config{}, err
+	}
+	agentMaxToolCalls, err := intEnv("AGENT_MAX_TOOL_CALLS", 6, 1, 12)
+	if err != nil {
+		return Config{}, err
+	}
+	agentMaxContextBytes, err := intEnv("AGENT_MAX_CONTEXT_BYTES", 32<<10, 4096, 1<<20)
+	if err != nil {
+		return Config{}, err
+	}
 
 	familyUserIDs, err := parseIDs(os.Getenv("FAMILY_USER_IDS"))
 	if err != nil {
@@ -51,19 +71,23 @@ func Load() (Config, error) {
 	}
 
 	config := Config{
-		DatabaseURL:      strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		HTTPAddr:         valueOrDefault("HTTP_ADDR", ":8080"),
-		WebDir:           valueOrDefault("WEB_DIR", "web/dist"),
-		Timezone:         timezone,
-		Location:         location,
-		LogLevel:         valueOrDefault("LOG_LEVEL", "info"),
-		BotEnabled:       botEnabled,
-		TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
-		FamilyUserIDs:    familyUserIDs,
-		LLMBaseURL:       strings.TrimRight(valueOrDefault("LLM_BASE_URL", "https://api.openai.com/v1"), "/"),
-		LLMModel:         strings.TrimSpace(os.Getenv("LLM_MODEL")),
-		LLMAPIKey:        strings.TrimSpace(os.Getenv("LLM_API_KEY")),
-		LLMTimeout:       llmTimeout,
+		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		HTTPAddr:             valueOrDefault("HTTP_ADDR", ":8080"),
+		WebDir:               valueOrDefault("WEB_DIR", "web/dist"),
+		Timezone:             timezone,
+		Location:             location,
+		LogLevel:             valueOrDefault("LOG_LEVEL", "info"),
+		BotEnabled:           botEnabled,
+		TelegramBotToken:     strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		FamilyUserIDs:        familyUserIDs,
+		LLMBaseURL:           strings.TrimRight(valueOrDefault("LLM_BASE_URL", "https://api.openai.com/v1"), "/"),
+		LLMModel:             strings.TrimSpace(os.Getenv("LLM_MODEL")),
+		LLMAPIKey:            strings.TrimSpace(os.Getenv("LLM_API_KEY")),
+		LLMTimeout:           llmTimeout,
+		AgentMaxLLMCalls:     agentMaxLLMCalls,
+		AgentMaxToolCalls:    agentMaxToolCalls,
+		AgentMaxContextBytes: agentMaxContextBytes,
+		AgentTurnTimeout:     agentTurnTimeout,
 	}
 
 	if config.DatabaseURL == "" {
@@ -111,6 +135,18 @@ func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	return parsed, nil
+}
+
+func intEnv(name string, fallback, minimum, maximum int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, fmt.Errorf("%s must be between %d and %d", name, minimum, maximum)
 	}
 	return parsed, nil
 }

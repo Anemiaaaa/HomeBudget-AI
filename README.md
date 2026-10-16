@@ -1,6 +1,6 @@
 # HomeBudget AI
 
-Сервис учёта семейных расходов из тестового задания. Сейчас реализована рабочая административная веб-панель с REST API; Telegram-бот и агент добавляются следующими этапами по [SDD](SDD.md). Исходные требования сохранены в [task.md](task.md).
+Сервис учёта семейных расходов из тестового задания: административная веб-панель с REST API и Telegram-бот, который выполняет операции через OpenAI-compatible tool calling. Реализация ведётся по [SDD](SDD.md), исходные требования сохранены в [task.md](task.md).
 
 ## Что уже работает
 
@@ -13,6 +13,10 @@
 - автоматические versioned-миграции, readiness/liveness endpoints;
 - Docker Compose и сохранение PostgreSQL в named volume;
 - отдельные smoke-клиенты Telegram `getMe` и OpenAI-compatible tool calling.
+- durable Telegram inbox: update и polling offset фиксируются одной транзакцией;
+- шесть owner-scoped tools, лимиты хода и строгий разбор аргументов;
+- атомарное сохранение мутации и готового ответа, отдельные повторы доставки;
+- подтверждение удаления серверным кодом без повторного вызова модели.
 
 ## Быстрый запуск
 
@@ -58,6 +62,8 @@ PostgreSQL хранит данные в named volume `expenses_data`. Обычн
 
 Секреты из `.env` исключены из Git.
 
+Для запуска бота установите `BOT_ENABLED=true`, заполните `TELEGRAM_BOT_TOKEN`, `LLM_MODEL` и при необходимости `LLM_API_KEY`/`LLM_BASE_URL`. При настроенном Telegram webhook приложение завершится с ошибкой: оно использует только long polling и не удаляет чужую конфигурацию автоматически. `FAMILY_USER_IDS` ограничивает доступ списком Telegram ID; пустое значение разрешает любые личные чаты.
+
 ## Проверки
 
 Unit-тесты и статическая проверка Go:
@@ -77,7 +83,7 @@ docker run --rm -v "${PWD}/web:/app" -w /app node:24-alpine npm run build
 После запуска Compose интеграционный тест PostgreSQL выполняется внутри его сети:
 
 ```bash
-docker run --rm --network test-task-expenses_default -e TEST_DATABASE_URL="postgres://expenses:expenses@db:5432/expenses?sslmode=disable" -v "${PWD}:/src" -w /src golang:1.25-alpine go test -tags integration ./internal/storage/postgres
+docker run --rm --network test-task-expenses_default -e TEST_DATABASE_URL="postgres://expenses:expenses@db:5432/expenses?sslmode=disable" -v "${PWD}:/src" -w /src golang:1.25-alpine go test -p 1 -tags integration ./internal/storage/postgres ./internal/appbot
 ```
 
 Smoke-команда внешних интеграций не пишет в базу и не отправляет сообщения:

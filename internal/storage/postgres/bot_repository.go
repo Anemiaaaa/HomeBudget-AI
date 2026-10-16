@@ -16,9 +16,12 @@ import (
 )
 
 var (
-	ErrNoBotWork       = errors.New("no bot work available")
-	ErrInvalidBotState = errors.New("invalid bot update state")
+	ErrNoBotWork         = errors.New("no bot work available")
+	ErrInvalidBotState   = errors.New("invalid bot update state")
+	ErrBotAlreadyRunning = errors.New("another bot worker already holds the singleton lock")
 )
+
+const botLockKey int64 = 0x484f4d4542554447
 
 const botUpdateColumns = `update_id, user_id, chat_id, message_id, message_at, reference_date,
        text, status, processing_attempts, delivery_attempts, next_attempt_at, result,
@@ -27,6 +30,41 @@ const botUpdateColumns = `update_id, user_id, chat_id, message_id, message_at, r
 type BotRepository struct{ pool *pgxpool.Pool }
 
 func NewBotRepository(pool *pgxpool.Pool) *BotRepository { return &BotRepository{pool: pool} }
+
+type BotLock struct{ conn *pgxpool.Conn }
+
+func (r *BotRepository) AcquireLock(ctx context.Context) (*BotLock, error) {
+	conn, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire bot lock connection: %w", err)
+	}
+	var acquired bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", botLockKey).Scan(&acquired); err != nil {
+		conn.Release()
+		return nil, fmt.Errorf("acquire bot singleton lock: %w", err)
+	}
+	if !acquired {
+		conn.Release()
+		return nil, ErrBotAlreadyRunning
+	}
+	return &BotLock{conn: conn}, nil
+}
+
+func (l *BotLock) Ping(ctx context.Context) error {
+	if l == nil || l.conn == nil {
+		return errors.New("bot lock is not held")
+	}
+	return l.conn.Ping(ctx)
+}
+
+func (l *BotLock) Release(ctx context.Context) {
+	if l == nil || l.conn == nil {
+		return
+	}
+	_, _ = l.conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", botLockKey)
+	l.conn.Release()
+	l.conn = nil
+}
 
 func (r *BotRepository) NextOffset(ctx context.Context) (int64, error) {
 	var offset int64
@@ -108,7 +146,36 @@ func (r *BotRepository) ClaimNext(ctx context.Context) (bot.Update, error) {
 	return claimed, nil
 }
 
-type Completion func(context.Context, *expense.OwnerService) (json.RawMessage, string, error)
+type CompletionUnit struct {
+	Expenses *expense.OwnerService
+	tx       pgx.Tx
+	UserID   int64
+	ChatID   int64
+}
+
+func (u *CompletionUnit) SaveSession(ctx context.Context, pending json.RawMessage, expiresAt time.Time) error {
+	if !json.Valid(pending) {
+		return errors.New("invalid bot pending action")
+	}
+	_, err := u.tx.Exec(ctx, `INSERT INTO bot_sessions (user_id, chat_id, pending_action, expires_at)
+		VALUES ($1, $2, $3::jsonb, $4)
+		ON CONFLICT (user_id, chat_id) DO UPDATE SET
+			pending_action = excluded.pending_action, expires_at = excluded.expires_at, updated_at = now()`,
+		u.UserID, u.ChatID, []byte(pending), expiresAt)
+	if err != nil {
+		return fmt.Errorf("save bot session in completion: %w", err)
+	}
+	return nil
+}
+
+func (u *CompletionUnit) ClearSession(ctx context.Context) error {
+	if _, err := u.tx.Exec(ctx, "DELETE FROM bot_sessions WHERE user_id = $1 AND chat_id = $2", u.UserID, u.ChatID); err != nil {
+		return fmt.Errorf("clear bot session in completion: %w", err)
+	}
+	return nil
+}
+
+type Completion func(context.Context, *CompletionUnit) (json.RawMessage, string, error)
 
 func (r *BotRepository) Complete(ctx context.Context, updateID int64, complete Completion) error {
 	if updateID <= 0 || complete == nil {
@@ -120,7 +187,8 @@ func (r *BotRepository) Complete(ctx context.Context, updateID int64, complete C
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var status bot.Status
-	if err := tx.QueryRow(ctx, "SELECT status FROM bot_updates WHERE update_id = $1 FOR UPDATE", updateID).Scan(&status); err != nil {
+	var userID, chatID pgtype.Int8
+	if err := tx.QueryRow(ctx, "SELECT status, user_id, chat_id FROM bot_updates WHERE update_id = $1 FOR UPDATE", updateID).Scan(&status, &userID, &chatID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return expense.ErrNotFound
 		}
@@ -129,9 +197,15 @@ func (r *BotRepository) Complete(ctx context.Context, updateID int64, complete C
 	if status != bot.StatusProcessing {
 		return fmt.Errorf("%w: cannot complete %s update", ErrInvalidBotState, status)
 	}
+	if !userID.Valid || !chatID.Valid {
+		return errors.New("processing bot update is missing actor")
+	}
 
-	ownerService := expense.NewOwnerService(NewExpenseRepositoryTx(tx))
-	result, reply, err := complete(ctx, ownerService)
+	unit := &CompletionUnit{
+		Expenses: expense.NewOwnerService(NewExpenseRepositoryTx(tx)), tx: tx,
+		UserID: userID.Int64, ChatID: chatID.Int64,
+	}
+	result, reply, err := complete(ctx, unit)
 	if err != nil {
 		return err
 	}

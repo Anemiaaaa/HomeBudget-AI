@@ -39,6 +39,20 @@ func TestBotRepositoryDurableInboxAndAtomicCompletion(t *testing.T) {
 	}
 
 	repository := NewBotRepository(pool)
+	lock, err := repository.AcquireLock(ctx)
+	if err != nil {
+		t.Fatalf("AcquireLock() error = %v", err)
+	}
+	if _, err := repository.AcquireLock(ctx); !errors.Is(err, ErrBotAlreadyRunning) {
+		t.Fatalf("second AcquireLock() error = %v", err)
+	}
+	lock.Release(ctx)
+	lock, err = repository.AcquireLock(ctx)
+	if err != nil {
+		t.Fatalf("AcquireLock(after release) error = %v", err)
+	}
+	lock.Release(ctx)
+
 	now := time.Date(2026, 10, 15, 15, 0, 0, 0, time.UTC)
 	reference := integrationDate(t, "2026-10-15")
 	userID, chatID, messageID, text := int64(101), int64(501), int64(11), "кофе 350"
@@ -71,8 +85,8 @@ func TestBotRepositoryDurableInboxAndAtomicCompletion(t *testing.T) {
 		t.Fatalf("second ClaimNext() error = %v", err)
 	}
 
-	err = repository.Complete(ctx, claimed.UpdateID, func(ctx context.Context, owner *expense.OwnerService) (json.RawMessage, string, error) {
-		created, err := owner.Create(ctx, userID, expense.CreateFields{
+	err = repository.Complete(ctx, claimed.UpdateID, func(ctx context.Context, unit *CompletionUnit) (json.RawMessage, string, error) {
+		created, err := unit.Expenses.Create(ctx, userID, expense.CreateFields{
 			Amount: "350", Category: expense.CategoryFood, SpentAt: "сегодня", Comment: &text,
 		}, reference)
 		if err != nil {
@@ -122,8 +136,8 @@ func TestBotRepositoryDurableInboxAndAtomicCompletion(t *testing.T) {
 		t.Fatalf("ClaimNext(rollback) = %+v, %v", claimed, err)
 	}
 	syntheticFailure := errors.New("synthetic completion failure")
-	err = repository.Complete(ctx, claimed.UpdateID, func(ctx context.Context, owner *expense.OwnerService) (json.RawMessage, string, error) {
-		if _, err := owner.Create(ctx, userID, expense.CreateFields{
+	err = repository.Complete(ctx, claimed.UpdateID, func(ctx context.Context, unit *CompletionUnit) (json.RawMessage, string, error) {
+		if _, err := unit.Expenses.Create(ctx, userID, expense.CreateFields{
 			Amount: "100", Category: expense.CategoryFood, SpentAt: "сегодня", Comment: &rollbackText,
 		}, reference); err != nil {
 			return nil, "", err

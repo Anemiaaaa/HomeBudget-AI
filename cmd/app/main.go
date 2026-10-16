@@ -10,10 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Anemiaaaa/HomeBudget-AI/internal/appbot"
+	botdomain "github.com/Anemiaaaa/HomeBudget-AI/internal/bot"
 	"github.com/Anemiaaaa/HomeBudget-AI/internal/config"
 	"github.com/Anemiaaaa/HomeBudget-AI/internal/expense"
 	"github.com/Anemiaaaa/HomeBudget-AI/internal/httpapi"
+	"github.com/Anemiaaaa/HomeBudget-AI/internal/llm"
 	postgresstore "github.com/Anemiaaaa/HomeBudget-AI/internal/storage/postgres"
+	"github.com/Anemiaaaa/HomeBudget-AI/internal/telegram"
 	"github.com/Anemiaaaa/HomeBudget-AI/migrations"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -52,6 +56,39 @@ func run() error {
 
 	repository := postgresstore.NewExpenseRepository(pool)
 	adminService := expense.NewAdminService(repository)
+	ownerService := expense.NewOwnerService(repository)
+	botError := make(chan error, 1)
+	var botLock *postgresstore.BotLock
+	if cfg.BotEnabled {
+		botRepository := postgresstore.NewBotRepository(pool)
+		botLock, err = botRepository.AcquireLock(rootContext)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			releaseContext, cancelRelease := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancelRelease()
+			botLock.Release(releaseContext)
+		}()
+
+		telegramClient, err := telegram.NewClient("https://api.telegram.org", cfg.TelegramBotToken, &http.Client{Timeout: 35 * time.Second})
+		if err != nil {
+			return err
+		}
+		llmClient, err := llm.NewOpenAIClient(cfg.LLMBaseURL, cfg.LLMAPIKey, &http.Client{Timeout: cfg.LLMTimeout})
+		if err != nil {
+			return err
+		}
+		poller := botdomain.NewPoller(telegramClient, botRepository, cfg.Location, cfg.FamilyUserIDs)
+		processor := appbot.NewProcessor(botRepository, llmClient, ownerService, telegramClient, cfg.LLMModel, appbot.ProcessorOptions{
+			MaxLLMCalls: cfg.AgentMaxLLMCalls, MaxToolCalls: cfg.AgentMaxToolCalls, MaxContextBytes: cfg.AgentMaxContextBytes,
+		})
+		go func() {
+			if err := appbot.Run(rootContext, poller, processor, botRepository, botLock, cfg.AgentTurnTimeout); err != nil {
+				botError <- err
+			}
+		}()
+	}
 
 	mux := http.NewServeMux()
 	httpapi.NewHealthHandler(pool).Register(mux)
@@ -81,6 +118,11 @@ func run() error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
+		return err
+	case err := <-botError:
+		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelShutdown()
+		_ = server.Shutdown(shutdownContext)
 		return err
 	}
 }
