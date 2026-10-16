@@ -249,6 +249,49 @@ func TestProcessorCreateDeleteConfirmationAndDelivery(t *testing.T) {
 	if _, err := reader.Get(ctx, 101, firstTaxi.ID); err != nil {
 		t.Fatalf("unselected expense was changed: %v", err)
 	}
+
+	staleExpense, err := reader.Create(ctx, 101, expense.CreateFields{Amount: "500", Category: expense.CategoryShopping, SpentAt: "2026-10-15", Comment: stringPointer("книга")}, mustIntegrationDate(t, "2026-10-15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.responses = append(provider.responses,
+		llm.ChatResponse{ToolCalls: []llm.ToolCall{{ID: "read_stale", Name: "list_expenses", Arguments: json.RawMessage(`{"expense_id":"` + strconv.FormatInt(staleExpense.ID, 10) + `"}`)}}},
+		llm.ChatResponse{ToolCalls: []llm.ToolCall{{ID: "delete_stale", Name: "delete_expense", Arguments: json.RawMessage(`{"expense_id":"` + strconv.FormatInt(staleExpense.ID, 10) + `","expected_version":"1"}`)}}},
+	)
+	ingestMessage(t, ctx, store, 10, 101, 501, "удали книгу", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(stale preparation) error = %v", err)
+	}
+	if _, err := reader.Update(ctx, 101, staleExpense.ID, expense.UpdateInput{
+		ExpectedVersion: 1,
+		Amount:          expense.Optional[string]{Set: true, Value: "600"},
+	}, mustIntegrationDate(t, "2026-10-15")); err != nil {
+		t.Fatalf("web update before confirmation: %v", err)
+	}
+	ingestMessage(t, ctx, store, 11, 101, 501, "да", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(stale confirmation) error = %v", err)
+	}
+	if _, err := reader.Get(ctx, 101, staleExpense.ID); err != nil {
+		t.Fatalf("stale confirmation deleted the expense: %v", err)
+	}
+	staleUpdate, err := store.Get(ctx, 11)
+	if err != nil || staleUpdate.ReplyText == nil || !strings.Contains(*staleUpdate.ReplyText, "уже изменился") {
+		t.Fatalf("stale confirmation update = %+v, %v", staleUpdate, err)
+	}
+
+	providerCallsBeforeBareConfirmation := len(provider.calls)
+	ingestMessage(t, ctx, store, 12, 101, 501, "да", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(bare confirmation) error = %v", err)
+	}
+	if len(provider.calls) != providerCallsBeforeBareConfirmation {
+		t.Fatal("bare confirmation unexpectedly called the LLM")
+	}
+	bareConfirmation, err := store.Get(ctx, 12)
+	if err != nil || bareConfirmation.ReplyText == nil || !strings.Contains(*bareConfirmation.ReplyText, "Нет действия") {
+		t.Fatalf("bare confirmation update = %+v, %v", bareConfirmation, err)
+	}
 }
 
 func ingestMessage(t *testing.T, ctx context.Context, store *postgresstore.BotRepository, updateID, userID, chatID int64, text, dateText string) {

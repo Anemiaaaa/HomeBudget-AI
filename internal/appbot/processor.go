@@ -99,6 +99,12 @@ func (p *Processor) ProcessOne(ctx context.Context) error {
 			return err
 		}
 	}
+	if len(activePending) == 0 {
+		answer := normalizeAnswer(*update.Text)
+		if isConfirm(answer) || isCancel(answer) {
+			return p.completeMessage(ctx, update.UpdateID, "no_pending_action", "Нет действия, которое ожидает подтверждения.", nil)
+		}
+	}
 	history, err := p.store.LoadHistory(ctx, *update.UserID, *update.ChatID, update.UpdateID, 6)
 	if err != nil {
 		return err
@@ -271,6 +277,9 @@ func (p *Processor) handlePending(ctx context.Context, update bot.Update, raw js
 		})
 	}
 	if !isConfirm(answer) {
+		if looksLikeNewRequest(answer) {
+			return false, nil
+		}
 		return true, p.completeMessage(ctx, update.UpdateID, "confirmation_required", pending.Prompt+" Ответьте «да, удали» или «отмена».", nil)
 	}
 	id, err := strconv.ParseInt(pending.ExpenseID, 10, 64)
@@ -552,6 +561,15 @@ func isConfirm(value string) bool {
 
 func isCancel(value string) bool {
 	return value == "нет" || value == "отмена" || value == "не удаляй"
+}
+
+func looksLikeNewRequest(value string) bool {
+	for _, marker := range []string{"добав", "запиш", "создай", "покаж", "сколько", "итого", "измени", "исправ", "обнов", "удали"} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return strings.IndexFunc(value, unicode.IsDigit) >= 0
 }
 
 func min(left, right int) int {

@@ -33,6 +33,20 @@ func TestSelectedCandidateUsesSavedOrder(t *testing.T) {
 	}
 }
 
+func TestNewRequestDetection(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"добавь кофе 300", "сколько потратил", "кофе 300", "удали такси"} {
+		if !looksLikeNewRequest(normalizeAnswer(input)) {
+			t.Errorf("%q was not detected as a new request", input)
+		}
+	}
+	for _, input := range []string{"может быть", "не уверен", "первое"} {
+		if looksLikeNewRequest(normalizeAnswer(input)) {
+			t.Errorf("%q was unexpectedly detected as a new request", input)
+		}
+	}
+}
+
 func TestTrimHistoryDropsOldestPairsOnly(t *testing.T) {
 	t.Parallel()
 	definitions := agent.Definitions()
