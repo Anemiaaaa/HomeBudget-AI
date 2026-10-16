@@ -194,10 +194,39 @@ func TestListLimitAndClarificationCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := executor.Execute(context.Background(), turn, Call{Name: "ask_clarification", Arguments: json.RawMessage(`{
-		"kind":"choose_target","question":"Какую запись изменить?","candidate_ids":["7"]
+		"kind":"choose_target","question":"Какую запись изменить?","candidate_ids":["7"],
+		"draft":{"intent":"update","patch":{"amount":"20"}}
 	}`)})
 	if err != nil || !result.StopsTurn || !turn.Finished {
 		t.Fatalf("clarification result = %+v, error = %v", result, err)
+	}
+}
+
+func TestClarificationDraftIsStrictAndMatchesKind(t *testing.T) {
+	t.Parallel()
+	item := expense.Expense{ID: 7, UserID: 101, Amount: mustMoney("10"), Category: expense.CategoryOther, SpentAt: mustDate("2026-10-15"), Version: 1}
+	executor := NewExecutor(&ownerExpensesStub{items: []expense.Expense{item}})
+
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{"missing draft", `{"kind":"clarify_create","question":"Какая сумма?"}`},
+		{"unknown draft field", `{"kind":"clarify_create","question":"Какая сумма?","draft":{"user_id":"202"}}`},
+		{"request without source", `{"kind":"clarify_request","question":"Что сделать?","draft":{}}`},
+		{"target without intent", `{"kind":"choose_target","question":"Какую?","candidate_ids":["7"],"draft":{"patch":{"amount":"20"}}}`},
+		{"delete with patch", `{"kind":"choose_target","question":"Какую?","candidate_ids":["7"],"draft":{"intent":"delete","patch":{"amount":"20"}}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			turn := &Turn{OwnerID: 101, ReferenceDate: mustDate("2026-10-15"), Reads: map[int64]ReadSnapshot{
+				7: {ID: 7, Version: 1, Amount: item.Amount},
+			}}
+			_, err := executor.Execute(context.Background(), turn, Call{Name: "ask_clarification", Arguments: json.RawMessage(test.raw)})
+			if !errors.Is(err, ErrInvalidArguments) {
+				t.Fatalf("error = %v, want ErrInvalidArguments", err)
+			}
+		})
 	}
 }
 

@@ -5,7 +5,9 @@ package appbot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -199,6 +201,54 @@ func TestProcessorCreateDeleteConfirmationAndDelivery(t *testing.T) {
 			}
 		}
 	}
+
+	firstTaxi, err := reader.Create(ctx, 101, expense.CreateFields{Amount: "900", Category: expense.CategoryTransport, SpentAt: "2026-10-14", Comment: stringPointer("такси")}, mustIntegrationDate(t, "2026-10-15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTaxi, err := reader.Create(ctx, 101, expense.CreateFields{Amount: "1200", Category: expense.CategoryTransport, SpentAt: "2026-10-15", Comment: stringPointer("такси")}, mustIntegrationDate(t, "2026-10-15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.responses = append(provider.responses,
+		llm.ChatResponse{ToolCalls: []llm.ToolCall{{ID: "read_many", Name: "list_expenses", Arguments: json.RawMessage(`{"query":"такси"}`)}}},
+		llm.ChatResponse{ToolCalls: []llm.ToolCall{{ID: "choose_one", Name: "ask_clarification", Arguments: json.RawMessage(`{
+			"kind":"choose_target","question":"Какое такси удалить?","candidate_ids":["` + strconv.FormatInt(firstTaxi.ID, 10) + `","` + strconv.FormatInt(secondTaxi.ID, 10) + `"],
+			"draft":{"intent":"delete"}
+		}`)}}},
+	)
+	ingestMessage(t, ctx, store, 7, 101, 501, "удали такси", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(target clarification) error = %v", err)
+	}
+	session, err = store.LoadSession(ctx, 101, 501)
+	if err != nil || !strings.Contains(string(session.PendingAction), "choose_target") {
+		t.Fatalf("target session = %+v, %v", session, err)
+	}
+
+	providerCallsBeforeSelection := len(provider.calls)
+	ingestMessage(t, ctx, store, 8, 101, 501, "второе", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(target selection) error = %v", err)
+	}
+	if len(provider.calls) != providerCallsBeforeSelection {
+		t.Fatal("server-side target selection unexpectedly called the LLM")
+	}
+	session, err = store.LoadSession(ctx, 101, 501)
+	if err != nil || !strings.Contains(string(session.PendingAction), `"confirm_delete"`) || !strings.Contains(string(session.PendingAction), strconv.FormatInt(secondTaxi.ID, 10)) {
+		t.Fatalf("selected delete session = %+v, %v", session, err)
+	}
+
+	ingestMessage(t, ctx, store, 9, 101, 501, "да", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(selected delete confirmation) error = %v", err)
+	}
+	if _, err := reader.Get(ctx, 101, secondTaxi.ID); !errors.Is(err, expense.ErrNotFound) {
+		t.Fatalf("selected expense lookup error = %v, want not found", err)
+	}
+	if _, err := reader.Get(ctx, 101, firstTaxi.ID); err != nil {
+		t.Fatalf("unselected expense was changed: %v", err)
+	}
 }
 
 func ingestMessage(t *testing.T, ctx context.Context, store *postgresstore.BotRepository, updateID, userID, chatID int64, text, dateText string) {
@@ -226,4 +276,15 @@ func assertExpenseCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, w
 	if count != want {
 		t.Fatalf("expense count = %d, want %d", count, want)
 	}
+}
+
+func stringPointer(value string) *string { return &value }
+
+func mustIntegrationDate(t *testing.T, value string) expense.Date {
+	t.Helper()
+	date, err := expense.ParseDate(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return date
 }

@@ -189,7 +189,7 @@ func (p *Processor) completeTool(ctx context.Context, update bot.Update, turn *a
 			if err != nil {
 				return nil, "", err
 			}
-			if err := unit.SaveSession(ctx, pending, p.now().Add(24*time.Hour)); err != nil {
+			if err := unit.SaveSession(ctx, pending, p.now().Add(10*time.Minute)); err != nil {
 				return nil, "", err
 			}
 		}
@@ -203,7 +203,7 @@ func (p *Processor) completeTool(ctx context.Context, update bot.Update, turn *a
 			if err != nil {
 				return nil, "", err
 			}
-			if err := unit.SaveSession(ctx, payload, p.now().Add(time.Hour)); err != nil {
+			if err := unit.SaveSession(ctx, payload, p.now().Add(10*time.Minute)); err != nil {
 				return nil, "", err
 			}
 		}
@@ -219,15 +219,25 @@ func (p *Processor) completeTool(ctx context.Context, update bot.Update, turn *a
 }
 
 type pendingAction struct {
-	Kind            string `json:"kind"`
-	ExpenseID       string `json:"expense_id"`
-	ExpectedVersion string `json:"expected_version"`
-	Prompt          string `json:"prompt"`
+	Kind            string               `json:"kind"`
+	ExpenseID       string               `json:"expense_id"`
+	ExpectedVersion string               `json:"expected_version"`
+	Prompt          string               `json:"prompt"`
+	Question        string               `json:"question"`
+	Candidates      []agent.ReadSnapshot `json:"candidates"`
+	Draft           json.RawMessage      `json:"draft"`
+	ReferenceDate   string               `json:"reference_date"`
 }
 
 func (p *Processor) handlePending(ctx context.Context, update bot.Update, raw json.RawMessage) (bool, error) {
 	var pending pendingAction
-	if err := json.Unmarshal(raw, &pending); err != nil || pending.Kind != "confirm_delete" {
+	if err := json.Unmarshal(raw, &pending); err != nil {
+		return false, nil
+	}
+	if pending.Kind == "choose_target" {
+		return p.handleTargetChoice(ctx, update, pending)
+	}
+	if pending.Kind != "confirm_delete" {
 		return false, nil
 	}
 	answer := normalizeAnswer(*update.Text)
@@ -273,6 +283,143 @@ func (p *Processor) handlePending(ctx context.Context, update bot.Update, raw js
 		})
 	}
 	return true, err
+}
+
+func (p *Processor) handleTargetChoice(ctx context.Context, update bot.Update, pending pendingAction) (bool, error) {
+	answer := normalizeAnswer(*update.Text)
+	if isCancel(answer) {
+		return true, p.store.Complete(ctx, update.UpdateID, func(ctx context.Context, unit *postgresstore.CompletionUnit) (json.RawMessage, string, error) {
+			if err := unit.ClearSession(ctx); err != nil {
+				return nil, "", err
+			}
+			return json.RawMessage(`{"status":"cancelled"}`), "Действие отменено.", nil
+		})
+	}
+	candidate, ok := selectedCandidate(answer, pending.Candidates)
+	if !ok {
+		question := strings.TrimSpace(pending.Question)
+		if question == "" {
+			question = "Какую запись выбрать?"
+		}
+		return true, p.completeMessage(ctx, update.UpdateID, "selection_required",
+			fmt.Sprintf("%s Ответьте номером от 1 до %d или «отмена».", question, len(pending.Candidates)), nil)
+	}
+
+	var draft struct {
+		Intent            string          `json:"intent"`
+		ExpectedOldAmount string          `json:"expected_old_amount,omitempty"`
+		Patch             json.RawMessage `json:"patch,omitempty"`
+	}
+	if err := json.Unmarshal(pending.Draft, &draft); err != nil {
+		return true, err
+	}
+	referenceDate := *update.ReferenceDate
+	if pending.ReferenceDate != "" {
+		parsed, err := expense.ParseDate(pending.ReferenceDate)
+		if err != nil {
+			return true, err
+		}
+		referenceDate = parsed
+	}
+
+	err := p.store.Complete(ctx, update.UpdateID, func(ctx context.Context, unit *postgresstore.CompletionUnit) (json.RawMessage, string, error) {
+		executor := agent.NewExecutor(unit.Expenses)
+		turn := &agent.Turn{OwnerID: unit.UserID, ReferenceDate: referenceDate}
+		readArgs, _ := json.Marshal(map[string]string{"expense_id": strconv.FormatInt(candidate.ID, 10)})
+		if _, err := executor.Execute(ctx, turn, agent.Call{Name: "list_expenses", Arguments: readArgs}); err != nil {
+			return nil, "", err
+		}
+		current := turn.Reads[candidate.ID]
+		if current.Version != candidate.Version {
+			return nil, "", expense.ErrVersionConflict
+		}
+
+		var call agent.Call
+		switch draft.Intent {
+		case "delete":
+			arguments, _ := json.Marshal(map[string]string{
+				"expense_id": strconv.FormatInt(candidate.ID, 10), "expected_version": strconv.FormatInt(candidate.Version, 10),
+			})
+			call = agent.Call{Name: "delete_expense", Arguments: arguments}
+		case "update":
+			arguments, err := json.Marshal(struct {
+				ExpenseID         string          `json:"expense_id"`
+				ExpectedVersion   string          `json:"expected_version"`
+				ExpectedOldAmount string          `json:"expected_old_amount,omitempty"`
+				Patch             json.RawMessage `json:"patch"`
+			}{strconv.FormatInt(candidate.ID, 10), strconv.FormatInt(candidate.Version, 10), draft.ExpectedOldAmount, draft.Patch})
+			if err != nil {
+				return nil, "", err
+			}
+			call = agent.Call{Name: "update_expense", Arguments: arguments}
+		default:
+			return nil, "", errors.New("unsupported saved target intent")
+		}
+
+		result, err := executor.Execute(ctx, turn, call)
+		if err != nil {
+			return nil, "", err
+		}
+		payload, reply, err := resultAndReply(result)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := unit.ClearSession(ctx); err != nil {
+			return nil, "", err
+		}
+		if draft.Intent == "delete" {
+			confirmation, err := pendingDelete(payload)
+			if err != nil {
+				return nil, "", err
+			}
+			if err := unit.SaveSession(ctx, confirmation, p.now().Add(10*time.Minute)); err != nil {
+				return nil, "", err
+			}
+		}
+		return payload, reply, nil
+	})
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, expense.ErrNotFound) || errors.Is(err, expense.ErrVersionConflict) {
+		return true, p.store.Complete(ctx, update.UpdateID, func(ctx context.Context, unit *postgresstore.CompletionUnit) (json.RawMessage, string, error) {
+			if clearErr := unit.ClearSession(ctx); clearErr != nil {
+				return nil, "", clearErr
+			}
+			return json.RawMessage(`{"status":"stale_selection"}`), "Расход уже изменился или удалён. Выберите его заново.", nil
+		})
+	}
+	if isSafeToolFailure(err) {
+		return true, p.store.Complete(ctx, update.UpdateID, func(ctx context.Context, unit *postgresstore.CompletionUnit) (json.RawMessage, string, error) {
+			if clearErr := unit.ClearSession(ctx); clearErr != nil {
+				return nil, "", clearErr
+			}
+			return json.RawMessage(`{"status":"tool_failed"}`), safeToolReply(err), nil
+		})
+	}
+	return true, err
+}
+
+func selectedCandidate(answer string, candidates []agent.ReadSnapshot) (agent.ReadSnapshot, bool) {
+	ordinals := map[string]int{
+		"1": 0, "первое": 0, "первый": 0, "первая": 0,
+		"2": 1, "второе": 1, "второй": 1, "вторая": 1,
+		"3": 2, "третье": 2, "третий": 2, "третья": 2,
+		"4": 3, "четвертое": 3, "четвёртое": 3, "четвертый": 3, "четвёртый": 3,
+		"5": 4, "пятое": 4, "пятый": 4, "пятая": 4,
+	}
+	if index, exists := ordinals[answer]; exists && index < len(candidates) {
+		return candidates[index], true
+	}
+	fields := strings.Fields(answer)
+	if len(fields) == 2 && (fields[0] == "номер" || fields[0] == "id") {
+		for _, candidate := range candidates {
+			if fields[1] == strconv.FormatInt(candidate.ID, 10) {
+				return candidate, true
+			}
+		}
+	}
+	return agent.ReadSnapshot{}, false
 }
 
 func (p *Processor) completeMessage(ctx context.Context, updateID int64, code, reply string, result json.RawMessage) error {
@@ -331,6 +478,7 @@ func systemPrompt(referenceDate string) string {
 	return `Ты управляешь личными расходами через tools. Текущая дата: ` + referenceDate + `.
 Всегда читай запись перед изменением или удалением. Не передавай user_id: владелец задан сервером.
 За один ход разрешена одна мутация. Для неполного или неоднозначного запроса используй ask_clarification.
+В draft для clarify_create сохраняй известные поля расхода; для clarify_request — original_request; для choose_target — intent и patch при обновлении.
 delete_expense только готовит подтверждение. Не утверждай, что данные изменены, без успешного tool result.
 Категории: food, transport, housing, entertainment, health, shopping, other.`
 }
@@ -418,10 +566,19 @@ func resultAndReply(result agent.Result) (json.RawMessage, string, error) {
 		return payload, fmt.Sprintf("Удалить %s — %s от %s, №%s?", title(prepared.Expense), rubles(prepared.Expense.Amount), displayDate(prepared.Expense.SpentAt), prepared.Expense.ID), nil
 	case "ask_clarification":
 		var clarification struct {
-			Question string `json:"question"`
+			Kind       string                   `json:"kind"`
+			Question   string                   `json:"question"`
+			Candidates []clarificationCandidate `json:"candidates"`
 		}
 		if err := json.Unmarshal(payload, &clarification); err != nil {
 			return nil, "", err
+		}
+		if clarification.Kind == "choose_target" {
+			lines := []string{"Нашёл несколько расходов. Какой выбрать?"}
+			for index, item := range clarification.Candidates {
+				lines = append(lines, fmt.Sprintf("%d. %s — %s, %s, №%d", index+1, displayDate(item.SpentAt), rubles(item.Amount), candidateTitle(item), item.ID))
+			}
+			return payload, strings.Join(lines, "\n"), nil
 		}
 		return payload, clarification.Question, nil
 	case "summarize_expenses":
@@ -461,6 +618,21 @@ type expenseView struct {
 	SpentAt  string           `json:"spent_at"`
 	Comment  *string          `json:"comment"`
 	Version  string           `json:"version"`
+}
+
+type clarificationCandidate struct {
+	ID       int64            `json:"id"`
+	Amount   string           `json:"amount"`
+	Category expense.Category `json:"category"`
+	SpentAt  string           `json:"spent_at"`
+	Comment  *string          `json:"comment"`
+}
+
+func candidateTitle(item clarificationCandidate) string {
+	if item.Comment != nil && strings.TrimSpace(*item.Comment) != "" {
+		return strings.TrimSpace(*item.Comment)
+	}
+	return categoryLabel(item.Category)
 }
 
 func pendingDelete(payload json.RawMessage) (json.RawMessage, error) {

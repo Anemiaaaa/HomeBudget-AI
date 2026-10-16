@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Anemiaaaa/HomeBudget-AI/internal/expense"
 )
@@ -317,6 +318,23 @@ type clarificationPayload struct {
 	Draft      json.RawMessage `json:"draft,omitempty"`
 }
 
+type clarificationCreateDraft struct {
+	Amount   string           `json:"amount,omitempty"`
+	Category expense.Category `json:"category,omitempty"`
+	SpentAt  string           `json:"spent_at,omitempty"`
+	Comment  *string          `json:"comment,omitempty"`
+}
+
+type clarificationRequestDraft struct {
+	OriginalRequest string `json:"original_request"`
+}
+
+type clarificationTargetDraft struct {
+	Intent            string          `json:"intent"`
+	ExpectedOldAmount string          `json:"expected_old_amount,omitempty"`
+	Patch             json.RawMessage `json:"patch,omitempty"`
+}
+
 func (e *Executor) askClarification(turn *Turn, raw json.RawMessage) (Result, error) {
 	var args clarificationArgs
 	if err := decodeArguments(raw, &args); err != nil {
@@ -328,6 +346,9 @@ func (e *Executor) askClarification(turn *Turn, raw json.RawMessage) (Result, er
 	}
 	if args.Question == "" || len([]rune(args.Question)) > 500 {
 		return Result{}, invalid("question must contain 1 to 500 characters")
+	}
+	if err := validateClarificationDraft(turn, args); err != nil {
+		return Result{}, err
 	}
 	candidates := make([]ReadSnapshot, 0, len(args.CandidateIDs))
 	if len(args.CandidateIDs) > 5 {
@@ -347,13 +368,88 @@ func (e *Executor) askClarification(turn *Turn, raw json.RawMessage) (Result, er
 	if args.Kind == "choose_target" && len(candidates) == 0 {
 		return Result{}, invalid("choose_target requires candidates read in the current turn")
 	}
-	if len(args.Draft) > 0 && !json.Valid(args.Draft) {
-		return Result{}, invalid("draft must be valid JSON")
-	}
 	turn.Finished = true
 	return Result{Name: "ask_clarification", Payload: clarificationPayload{
 		Kind: args.Kind, Question: args.Question, Candidates: candidates, Draft: args.Draft,
 	}, StopsTurn: true}, nil
+}
+
+func validateClarificationDraft(turn *Turn, args clarificationArgs) error {
+	if len(args.Draft) == 0 || strings.TrimSpace(string(args.Draft)) == "null" {
+		return invalid("draft is required")
+	}
+	switch args.Kind {
+	case "clarify_create":
+		if len(args.CandidateIDs) > 0 {
+			return invalid("clarify_create must not contain candidates")
+		}
+		var draft clarificationCreateDraft
+		if err := decodeArguments(args.Draft, &draft); err != nil {
+			return err
+		}
+		if draft.Amount != "" {
+			if _, err := expense.ParseMoney(draft.Amount); err != nil {
+				return invalid("draft amount is invalid")
+			}
+		}
+		if draft.Category != "" {
+			if err := expense.ValidateCategory(draft.Category); err != nil {
+				return invalid("draft category is invalid")
+			}
+		}
+		if draft.SpentAt != "" {
+			date, err := expense.ResolveRelativeDate(draft.SpentAt, turn.ReferenceDate)
+			if err != nil || date.After(turn.ReferenceDate) {
+				return invalid("draft spent_at is invalid")
+			}
+		}
+		if draft.Comment != nil && utf8.RuneCountInString(strings.TrimSpace(*draft.Comment)) > 500 {
+			return invalid("draft comment is too long")
+		}
+	case "clarify_request":
+		if len(args.CandidateIDs) > 0 {
+			return invalid("clarify_request must not contain candidates")
+		}
+		var draft clarificationRequestDraft
+		if err := decodeArguments(args.Draft, &draft); err != nil {
+			return err
+		}
+		if strings.TrimSpace(draft.OriginalRequest) == "" || utf8.RuneCountInString(draft.OriginalRequest) > 1000 {
+			return invalid("draft original_request must contain 1 to 1000 characters")
+		}
+	case "choose_target":
+		var draft clarificationTargetDraft
+		if err := decodeArguments(args.Draft, &draft); err != nil {
+			return err
+		}
+		if draft.Intent != "update" && draft.Intent != "delete" {
+			return invalid("choose_target draft intent must be update or delete")
+		}
+		if draft.Intent == "delete" {
+			if len(draft.Patch) > 0 || draft.ExpectedOldAmount != "" {
+				return invalid("delete target draft must not contain update fields")
+			}
+			return nil
+		}
+		if len(draft.Patch) == 0 {
+			return invalid("update target draft requires patch")
+		}
+		var patch updatePatch
+		if err := decodeArguments(draft.Patch, &patch); err != nil {
+			return err
+		}
+		if !patch.Amount.Set && !patch.Category.Set && !patch.SpentAt.Set && !patch.Comment.Set {
+			return invalid("update target draft patch must not be empty")
+		}
+		if draft.ExpectedOldAmount != "" {
+			if _, err := expense.ParseMoney(draft.ExpectedOldAmount); err != nil {
+				return invalid("draft expected_old_amount is invalid")
+			}
+		}
+	default:
+		return invalid("unsupported clarification kind")
+	}
+	return nil
 }
 
 type expensePayload struct {

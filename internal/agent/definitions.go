@@ -16,6 +16,18 @@ func Definitions() []Definition {
 	identifier := map[string]any{"type": "string", "pattern": `^[1-9][0-9]*$`}
 	money := map[string]any{"type": "string", "pattern": `^(0|[1-9][0-9]*)(\.[0-9]{1,2})?$`}
 	date := map[string]any{"type": "string", "description": "YYYY-MM-DD; create/update also accept Russian relative dates"}
+	patch := object(map[string]any{
+		"amount": money, "category": category, "spent_at": date,
+		"comment": map[string]any{"type": []string{"string", "null"}, "maxLength": 500},
+	})
+	draft := object(map[string]any{
+		"amount": money, "category": category, "spent_at": date,
+		"comment":             map[string]any{"type": "string", "maxLength": 500},
+		"original_request":    map[string]any{"type": "string", "minLength": 1, "maxLength": 1000},
+		"intent":              map[string]any{"type": "string", "enum": []string{"update", "delete"}},
+		"expected_old_amount": money,
+		"patch":               patch,
+	})
 
 	return []Definition{
 		function("create_expense", "Create one expense for the authenticated owner", object(
@@ -41,10 +53,7 @@ func Definitions() []Definition {
 			map[string]any{
 				"expense_id": identifier, "expected_version": identifier,
 				"expected_old_amount": money,
-				"patch": object(map[string]any{
-					"amount": money, "category": category, "spent_at": date,
-					"comment": map[string]any{"type": []string{"string", "null"}, "maxLength": 500},
-				}),
+				"patch":               patch,
 			},
 			"expense_id", "expected_version", "patch",
 		)),
@@ -56,10 +65,10 @@ func Definitions() []Definition {
 			map[string]any{
 				"kind":          map[string]any{"type": "string", "enum": []string{"clarify_create", "clarify_request", "choose_target"}},
 				"question":      map[string]any{"type": "string", "minLength": 1, "maxLength": 500},
-				"draft":         map[string]any{"type": "object"},
+				"draft":         draft,
 				"candidate_ids": map[string]any{"type": "array", "maxItems": 5, "items": identifier},
 			},
-			"kind", "question",
+			"kind", "question", "draft",
 		)),
 	}
 }
