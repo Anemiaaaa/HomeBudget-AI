@@ -125,6 +125,73 @@ func TestProcessorCreateDeleteConfirmationAndDelivery(t *testing.T) {
 		t.Fatalf("sent messages = %v", sender.messages)
 	}
 
+	provider.responses = append(provider.responses, llm.ChatResponse{ToolCalls: []llm.ToolCall{{
+		ID: "clarify_1", Name: "ask_clarification", Arguments: json.RawMessage(`{
+			"kind":"clarify_create","question":"Какая сумма?","draft":{"comment":"кофе","category":"food","spent_at":"сегодня"}
+		}`),
+	}}})
+	ingestMessage(t, ctx, store, 4, 101, 501, "кофе", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(clarification) error = %v", err)
+	}
+	session, err = store.LoadSession(ctx, 101, 501)
+	if err != nil || !strings.Contains(string(session.PendingAction), "clarify_create") || !strings.Contains(string(session.PendingAction), "reference_date") {
+		t.Fatalf("clarification session = %+v, %v", session, err)
+	}
+	if err := processor.DeliverOne(ctx); err != nil {
+		t.Fatalf("DeliverOne(clarification) error = %v", err)
+	}
+
+	provider.responses = append(provider.responses, llm.ChatResponse{ToolCalls: []llm.ToolCall{{
+		ID: "create_2", Name: "create_expense", Arguments: json.RawMessage(`{"amount":"200","category":"food","spent_at":"2026-10-15","comment":"кофе"}`),
+	}}})
+	ingestMessage(t, ctx, store, 5, 101, 501, "200", "2026-10-16")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(clarification answer) error = %v", err)
+	}
+	assertExpenseCount(t, ctx, pool, 1)
+	session, err = store.LoadSession(ctx, 101, 501)
+	if err != nil || session.PendingAction != nil {
+		t.Fatalf("session after clarified create = %+v, %v", session, err)
+	}
+	if err := processor.DeliverOne(ctx); err != nil {
+		t.Fatalf("DeliverOne(clarified create) error = %v", err)
+	}
+	lastCall := provider.calls[len(provider.calls)-1]
+	foundPending := false
+	for _, message := range lastCall.Messages {
+		foundPending = foundPending || strings.Contains(message.Content, "clarify_create")
+	}
+	if !foundPending {
+		t.Fatalf("saved clarification was not passed to the next turn: %+v", lastCall.Messages)
+	}
+
+	expired := json.RawMessage(`{"kind":"clarify_create","question":"Старая сессия"}`)
+	if err := store.SaveSession(ctx, 101, 501, expired, processor.now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	provider.responses = append(provider.responses,
+		llm.ChatResponse{ToolCalls: []llm.ToolCall{{ID: "summary_1", Name: "summarize_expenses", Arguments: json.RawMessage(`{}`)}}},
+		llm.ChatResponse{Content: "model prose is ignored"},
+	)
+	providerCallCount := len(provider.calls)
+	ingestMessage(t, ctx, store, 6, 101, 501, "сколько я потратил", "2026-10-16")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(expired session) error = %v", err)
+	}
+	if len(provider.calls) != providerCallCount+2 {
+		t.Fatalf("provider calls = %d, want %d", len(provider.calls), providerCallCount+2)
+	}
+	for _, message := range provider.calls[providerCallCount].Messages {
+		if strings.Contains(message.Content, "Старая сессия") {
+			t.Fatal("expired session was sent to the model")
+		}
+	}
+	storedSummary, err := store.Get(ctx, 6)
+	if err != nil || storedSummary.ReplyText == nil || !strings.Contains(*storedSummary.ReplyText, "200,00 ₽") || strings.Contains(*storedSummary.ReplyText, "model prose") {
+		t.Fatalf("stored summary = %+v, %v", storedSummary, err)
+	}
+
 	for _, call := range provider.calls {
 		for _, message := range call.Messages {
 			if strings.Contains(message.Content, "Telegram ID") || strings.Contains(message.Content, "101") {

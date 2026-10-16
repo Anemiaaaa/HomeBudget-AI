@@ -43,9 +43,13 @@ type Turn struct {
 }
 
 type ReadSnapshot struct {
-	ID      int64
-	Version int64
-	Amount  expense.Money
+	ID         int64            `json:"id"`
+	Version    int64            `json:"version"`
+	Amount     expense.Money    `json:"-"`
+	AmountText string           `json:"amount"`
+	Category   expense.Category `json:"category"`
+	SpentAt    string           `json:"spent_at"`
+	Comment    *string          `json:"comment"`
 }
 
 type Call struct {
@@ -369,7 +373,10 @@ func toExpense(item expense.Expense) expensePayload {
 }
 
 func remember(turn *Turn, item expense.Expense) {
-	turn.Reads[item.ID] = ReadSnapshot{ID: item.ID, Version: item.Version, Amount: item.Amount}
+	turn.Reads[item.ID] = ReadSnapshot{
+		ID: item.ID, Version: item.Version, Amount: item.Amount, AmountText: item.Amount.String(),
+		Category: item.Category, SpentAt: item.SpentAt.String(), Comment: item.Comment,
+	}
 }
 
 func target(rawID, rawVersion string, turn *Turn) (int64, int64, error) {
