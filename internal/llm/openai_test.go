@@ -17,7 +17,7 @@ func TestProbeExpenseTool(t *testing.T) {
 			t.Fatalf("Authorization = %q", got)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"choices":[{"message":{"tool_calls":[{"id":"call_1","function":{"name":"create_expense","arguments":"{\"amount\":\"350.00\",\"category\":\"food\",\"spent_at\":\"2026-10-15\",\"comment\":\"кофе\"}"}}]}}]}`))
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"create_expense","arguments":"{\"amount\":\"350.00\",\"category\":\"food\",\"spent_at\":\"2026-10-15\",\"comment\":\"кофе\"}"}}]}}]}`))
 	}))
 	defer server.Close()
 
@@ -46,15 +46,21 @@ func TestOpenAIClientRejectsRemotePlainHTTP(t *testing.T) {
 
 func TestGPT56ChatCompatibilityDisablesReasoning(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{}
+	payload := map[string]any{"max_tokens": 800}
 	applyChatCompatibility(payload, "openai/gpt-5.6-luna")
 	if payload["reasoning_effort"] != "none" {
 		t.Fatalf("reasoning_effort = %v", payload["reasoning_effort"])
 	}
+	if _, exists := payload["max_tokens"]; exists || payload["max_completion_tokens"] != 800 {
+		t.Fatalf("token limit fields = %+v", payload)
+	}
 
-	regular := map[string]any{}
+	regular := map[string]any{"max_tokens": 800}
 	applyChatCompatibility(regular, "gpt-4.1-mini")
 	if _, exists := regular["reasoning_effort"]; exists {
 		t.Fatal("reasoning_effort was added for an unrelated model")
+	}
+	if regular["max_tokens"] != 800 {
+		t.Fatalf("regular token limit fields = %+v", regular)
 	}
 }
