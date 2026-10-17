@@ -108,7 +108,7 @@ func TestNormalizeTerminalCallAsksForMissingAmount(t *testing.T) {
 func TestNormalizeTerminalCallRepairsCompositeClarification(t *testing.T) {
 	t.Parallel()
 	call := normalizeToolCall("кофе 100 и такси 200", nil, llm.ToolCall{
-		Name: "ask_clarification", Arguments: []byte(`{"kind":"clarify_request","question":"Что добавить?","draft":{}}`),
+		Name: "ask_clarification", Arguments: []byte(`{"kind":"clarify_create","question":"Что добавить?","draft":{"comment":"кофе"}}`),
 	})
 	if !strings.Contains(string(call.Arguments), "один расход") || !strings.Contains(string(call.Arguments), "original_request") {
 		t.Fatalf("normalized call arguments = %s", call.Arguments)

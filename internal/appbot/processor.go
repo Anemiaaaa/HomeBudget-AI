@@ -24,7 +24,7 @@ type Provider interface {
 	Chat(context.Context, llm.ChatRequest) (llm.ChatResponse, error)
 }
 
-const PromptVersion = "2026-10-17.4"
+const PromptVersion = "2026-10-17.5"
 
 var amountPattern = regexp.MustCompile(`\d+(?:[.,]\d{1,2})?`)
 
@@ -545,6 +545,16 @@ func normalizeToolCall(input string, turn *agent.Turn, call llm.ToolCall) llm.To
 		call.Arguments = json.RawMessage(`{}`)
 		return call
 	}
+	if call.Name == "ask_clarification" && isCompositeExpenseRequest(input) {
+		encoded, err := json.Marshal(map[string]any{
+			"kind": "clarify_request", "question": "Пришлите один расход отдельным сообщением.",
+			"draft": map[string]string{"original_request": input},
+		})
+		if err == nil {
+			call.Arguments = encoded
+		}
+		return call
+	}
 	if call.Name == "create_expense" {
 		var arguments map[string]json.RawMessage
 		if json.Unmarshal(call.Arguments, &arguments) != nil {
@@ -640,9 +650,6 @@ func normalizeToolCall(input string, turn *agent.Turn, call llm.ToolCall) llm.To
 		return call
 	}
 	question := strings.TrimSpace(arguments.Question)
-	if isCompositeExpenseRequest(input) {
-		question = "Пришлите один расход отдельным сообщением."
-	}
 	if question == "" {
 		question = "Уточните запрос."
 	}
