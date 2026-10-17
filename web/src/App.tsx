@@ -63,6 +63,7 @@ export function App() {
   const userLabels = useMemo(() => new Map(users.map((user) => [user.id, user.display_name ?? `Telegram ${user.id}`])), [users])
   const page = Math.floor(offset / PAGE_SIZE) + 1
   const pageCount = Math.max(1, Math.ceil(list.total_count / PAGE_SIZE))
+  const hasActiveFilters = Object.values(filters).some(Boolean)
 
   function applyFilters() {
     setOffset(0)
@@ -112,11 +113,15 @@ export function App() {
     <main className="shell">
       <header className="page-header">
         <div>
+          <div className="brand-lockup" aria-label="HomeBudget">
+            <img src="/homebudget-mark.png" width="42" height="42" alt="" />
+            <span>homebudget</span>
+          </div>
           <span className="eyebrow">Семейный бюджет · {meta.timezone}</span>
           <h1>Расходы семьи</h1>
           <p>Все траты в одном месте — с понятными фильтрами и быстрым редактированием.</p>
         </div>
-        <button className="button primary" type="button" onClick={openCreate}>+ Добавить расход</button>
+        <button className="button primary" type="button" onClick={openCreate}><span aria-hidden="true">+</span> Добавить расход</button>
       </header>
 
       <section className="summary-grid" aria-label="Итоги по текущему фильтру">
@@ -128,20 +133,26 @@ export function App() {
 
       <section className="panel filters-panel">
         <div className="panel-heading"><div><span className="eyebrow">Срез данных</span><h2>Фильтры</h2></div></div>
-        <div className="filters">
+        <form className="filters" onSubmit={(event) => { event.preventDefault(); applyFilters() }}>
           <label className="search-filter"><span>Поиск по комментарию</span><input type="search" maxLength={200} placeholder="Например, кофе" value={draftFilters.query} onChange={(event) => setDraftFilters((current) => ({ ...current, query: event.target.value }))} /></label>
           <label><span>Член семьи</span><select value={draftFilters.user_id} onChange={(event) => setDraftFilters((current) => ({ ...current, user_id: event.target.value }))}><option value="">Все</option>{users.map((user) => <option key={user.id} value={user.id}>{userLabels.get(user.id)}</option>)}</select></label>
           <label><span>Категория</span><select value={draftFilters.category} onChange={(event) => setDraftFilters((current) => ({ ...current, category: event.target.value }))}><option value="">Все</option>{meta.categories.map((category) => <option key={category.code} value={category.code}>{category.label}</option>)}</select></label>
           <label><span>С даты</span><input type="date" max={meta.today} value={draftFilters.date_from} onChange={(event) => setDraftFilters((current) => ({ ...current, date_from: event.target.value }))} /></label>
           <label><span>По дату</span><input type="date" max={meta.today} value={draftFilters.date_to} onChange={(event) => setDraftFilters((current) => ({ ...current, date_to: event.target.value }))} /></label>
-          <div className="filter-actions"><button className="button primary" type="button" onClick={applyFilters}>Применить</button><button className="button secondary" type="button" onClick={resetFilters}>Сбросить</button></div>
-        </div>
+          <div className="filter-actions"><button className="button primary" type="submit">Применить</button><button className="button secondary" type="button" onClick={resetFilters} disabled={!hasActiveFilters && !Object.values(draftFilters).some(Boolean)}>Сбросить</button></div>
+        </form>
       </section>
 
       {error ? <div className="notice error" role="alert">{error}</div> : null}
 
       <section className="panel expenses-panel">
-        <div className="panel-heading"><div><span className="eyebrow">{list.total_count} записей</span><h2>История расходов</h2></div>{loading ? <span className="loading-dot">Обновляем…</span> : null}</div>
+        <div className="panel-heading">
+          <div><span className="eyebrow">{list.total_count} {plural(list.total_count, 'запись', 'записи', 'записей')}</span><h2>История расходов</h2></div>
+          <div className="panel-heading-actions" aria-live="polite">
+            {loading ? <span className="loading-dot">Обновляем…</span> : null}
+            <button className="button secondary compact" type="button" disabled={loading} onClick={() => setRefreshToken((current) => current + 1)}><span aria-hidden="true">↻</span> Обновить</button>
+          </div>
+        </div>
         {list.items.length === 0 && !loading ? (
           <div className="empty-state"><div className="empty-icon">₽</div><h3>Расходов не найдено</h3><p>Измените фильтры или добавьте первую запись.</p><button className="button primary" type="button" onClick={openCreate}>Добавить расход</button></div>
         ) : (
@@ -150,12 +161,12 @@ export function App() {
               <thead><tr><th>Дата</th><th>Владелец</th><th>Категория</th><th>Комментарий</th><th className="number">Сумма</th><th><span className="visually-hidden">Действия</span></th></tr></thead>
               <tbody>{list.items.map((item) => (
                 <tr key={item.id}>
-                  <td><strong>{formatDate(item.spent_at)}</strong><small>№{item.id}</small></td>
-                  <td>{userLabels.get(item.user_id) ?? `Telegram ${item.user_id}`}</td>
-                  <td><span className={`category category-${item.category}`}>{categoryLabels.get(item.category) ?? item.category}</span></td>
-                  <td className="comment">{item.comment || '—'}</td>
-                  <td className="number amount">{formatMoney(item.amount)}</td>
-                  <td><div className="row-actions"><button type="button" onClick={() => openEdit(item)}>Изменить</button><button className="danger-link" type="button" onClick={() => void remove(item)}>Удалить</button></div></td>
+                  <td data-label="Дата"><strong>{formatDate(item.spent_at)}</strong><small>№{item.id}</small></td>
+                  <td data-label="Владелец">{userLabels.get(item.user_id) ?? `Telegram ${item.user_id}`}</td>
+                  <td data-label="Категория"><span className={`category category-${item.category}`}>{categoryLabels.get(item.category) ?? item.category}</span></td>
+                  <td data-label="Комментарий" className="comment">{item.comment || '—'}</td>
+                  <td data-label="Сумма" className="number amount">{formatMoney(item.amount)}</td>
+                  <td className="actions-cell"><div className="row-actions"><button type="button" aria-label={`Изменить расход №${item.id}`} onClick={() => openEdit(item)}>Изменить</button><button className="danger-link" type="button" aria-label={`Удалить расход №${item.id}`} onClick={() => void remove(item)}>Удалить</button></div></td>
                 </tr>
               ))}</tbody>
             </table>

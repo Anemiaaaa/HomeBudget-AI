@@ -12,7 +12,7 @@ interface Props {
 
 export function ExpenseDialog({ expense, meta, users, onClose, onSaved }: Props) {
   const [form, setForm] = useState<ExpensePayload>(() => ({
-    user_id: expense?.user_id ?? '',
+    user_id: expense?.user_id ?? users[0]?.id ?? '',
     amount: expense?.amount ?? '',
     category: expense?.category ?? 'other',
     spent_at: expense?.spent_at ?? meta.today,
@@ -28,10 +28,11 @@ export function ExpenseDialog({ expense, meta, users, onClose, onSaved }: Props)
     setError('')
     setFields({})
     try {
+      const payload = { ...form, amount: normalizeAmount(form.amount) }
       if (expense) {
-        await updateExpense(expense.id, expense.version, form)
+        await updateExpense(expense.id, expense.version, payload)
       } else {
-        await createExpense(form)
+        await createExpense(payload)
       }
       onSaved()
     } catch (caught) {
@@ -52,7 +53,7 @@ export function ExpenseDialog({ expense, meta, users, onClose, onSaved }: Props)
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
-      <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="expense-dialog-title">
+      <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="expense-dialog-title" onKeyDown={(event) => event.key === 'Escape' && !saving && onClose()}>
         <div className="dialog-heading">
           <div>
             <span className="eyebrow">{expense ? `Трата №${expense.id}` : 'Новая запись'}</span>
@@ -63,14 +64,16 @@ export function ExpenseDialog({ expense, meta, users, onClose, onSaved }: Props)
 
         <form onSubmit={submit} className="expense-form">
           <label>
-            <span>Telegram ID владельца</span>
+            <span>Владелец</span>
             <input
               required
               inputMode="numeric"
               list="known-users"
+              placeholder="Выберите или введите Telegram ID"
               value={form.user_id}
               onChange={(event) => update('user_id', event.target.value)}
               aria-invalid={Boolean(fields.user_id)}
+              autoFocus={!form.user_id}
             />
             <datalist id="known-users">
               {users.map((user) => <option key={user.id} value={user.id}>{user.display_name ?? `Telegram ${user.id}`}</option>)}
@@ -81,7 +84,7 @@ export function ExpenseDialog({ expense, meta, users, onClose, onSaved }: Props)
           <div className="form-grid">
             <label>
               <span>Сумма, ₽</span>
-              <input required inputMode="decimal" placeholder="350.00" value={form.amount} onChange={(event) => update('amount', event.target.value)} aria-invalid={Boolean(fields.amount)} />
+              <input required inputMode="decimal" placeholder="350,00" value={form.amount} onChange={(event) => update('amount', event.target.value)} aria-invalid={Boolean(fields.amount)} autoFocus={Boolean(form.user_id)} />
               {fields.amount ? <small className="field-error">{fields.amount}</small> : null}
             </label>
             <label>
@@ -115,4 +118,8 @@ export function ExpenseDialog({ expense, meta, users, onClose, onSaved }: Props)
       </section>
     </div>
   )
+}
+
+function normalizeAmount(value: string): string {
+  return value.trim().replace(/\s/g, '').replace(',', '.')
 }
