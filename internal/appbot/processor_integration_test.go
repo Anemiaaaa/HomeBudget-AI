@@ -292,6 +292,30 @@ func TestProcessorCreateDeleteConfirmationAndDelivery(t *testing.T) {
 	if err != nil || bareConfirmation.ReplyText == nil || !strings.Contains(*bareConfirmation.ReplyText, "Нет действия") {
 		t.Fatalf("bare confirmation update = %+v, %v", bareConfirmation, err)
 	}
+
+	provider.responses = append(provider.responses, llm.ChatResponse{})
+	ingestMessage(t, ctx, store, 13, 101, 501, "сколько всего потратил", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(summary fallback) error = %v", err)
+	}
+	summaryFallback, err := store.Get(ctx, 13)
+	if err != nil || summaryFallback.ReplyText == nil || !strings.Contains(*summaryFallback.ReplyText, "Итого:") {
+		t.Fatalf("summary fallback update = %+v, %v", summaryFallback, err)
+	}
+
+	provider.responses = append(provider.responses, llm.ChatResponse{})
+	ingestMessage(t, ctx, store, 14, 101, 501, "кофе 100 и такси 200", "2026-10-15")
+	if err := processor.ProcessOne(ctx); err != nil {
+		t.Fatalf("ProcessOne(composite fallback) error = %v", err)
+	}
+	compositeFallback, err := store.Get(ctx, 14)
+	if err != nil || compositeFallback.ReplyText == nil || !strings.Contains(*compositeFallback.ReplyText, "один расход") {
+		t.Fatalf("composite fallback update = %+v, %v", compositeFallback, err)
+	}
+	session, err = store.LoadSession(ctx, 101, 501)
+	if err != nil || !strings.Contains(string(session.PendingAction), "clarify_request") {
+		t.Fatalf("composite fallback session = %+v, %v", session, err)
+	}
 }
 
 func ingestMessage(t *testing.T, ctx context.Context, store *postgresstore.BotRepository, updateID, userID, chatID int64, text, dateText string) {

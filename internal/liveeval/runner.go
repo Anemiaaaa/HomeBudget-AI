@@ -100,15 +100,16 @@ type expenseSpec struct {
 }
 
 type stepSpec struct {
-	Input         string        `json:"input"`
-	CountA        *int          `json:"count_a"`
-	CountB        *int          `json:"count_b"`
-	ExpensesA     []expenseSpec `json:"expenses_a"`
-	ExpensesB     []expenseSpec `json:"expenses_b"`
-	ReplyContains []string      `json:"reply_contains"`
-	ReplyExcludes []string      `json:"reply_excludes"`
-	Pending       string        `json:"pending"`
-	MaxToolCalls  *int          `json:"max_tool_calls"`
+	Input              string        `json:"input"`
+	CountA             *int          `json:"count_a"`
+	CountB             *int          `json:"count_b"`
+	ExpensesA          []expenseSpec `json:"expenses_a"`
+	ExpensesB          []expenseSpec `json:"expenses_b"`
+	ReplyContains      []string      `json:"reply_contains"`
+	ReplyContainsOneOf []string      `json:"reply_contains_one_of"`
+	ReplyExcludes      []string      `json:"reply_excludes"`
+	Pending            string        `json:"pending"`
+	MaxToolCalls       *int          `json:"max_tool_calls"`
 }
 
 type apiMeasurement struct {
@@ -288,6 +289,18 @@ func validateStep(ctx context.Context, pool *pgxpool.Pool, store *postgresstore.
 	for _, expected := range spec.ReplyContains {
 		if !strings.Contains(strings.ToLower(result.Reply), strings.ToLower(expected)) {
 			failStep(result, fmt.Sprintf("reply does not contain %q", expected))
+		}
+	}
+	if len(spec.ReplyContainsOneOf) > 0 {
+		matched := false
+		for _, expected := range spec.ReplyContainsOneOf {
+			if strings.Contains(strings.ToLower(result.Reply), strings.ToLower(expected)) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			failStep(result, fmt.Sprintf("reply does not contain any of %q", spec.ReplyContainsOneOf))
 		}
 	}
 	for _, forbidden := range spec.ReplyExcludes {

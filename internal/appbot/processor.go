@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ type Provider interface {
 	Chat(context.Context, llm.ChatRequest) (llm.ChatResponse, error)
 }
 
-const PromptVersion = "2026-10-17.3"
+const PromptVersion = "2026-10-17.4"
 
 var amountPattern = regexp.MustCompile(`\d+(?:[.,]\d{1,2})?`)
 
@@ -147,6 +148,9 @@ func (p *Processor) runAgent(ctx context.Context, update bot.Update, activePendi
 		}
 		response, err := p.provider.Chat(ctx, llm.ChatRequest{Model: p.model, Messages: messages, Tools: definitions, MaxTokens: 800})
 		if err != nil {
+			if handled, fallbackErr := p.completeKnownRequest(ctx, update, turn, executor, clearPending); handled {
+				return fallbackErr
+			}
 			return p.completeMessage(ctx, update.UpdateID, "llm_unavailable", "Сейчас не получилось обработать запрос. Ничего не изменено.", nil)
 		}
 		if len(response.ToolCalls) == 0 {
@@ -155,6 +159,9 @@ func (p *Processor) runAgent(ctx context.Context, update bot.Update, activePendi
 				if err == nil {
 					return p.completeAgentMessage(ctx, update.UpdateID, "read_result", reply, result, clearPending)
 				}
+			}
+			if handled, fallbackErr := p.completeKnownRequest(ctx, update, turn, executor, clearPending); handled {
+				return fallbackErr
 			}
 			return p.completeAgentMessage(ctx, update.UpdateID, "clarification_required", "Уточните, что нужно сделать с расходами.", nil, clearPending)
 		}
@@ -170,7 +177,7 @@ func (p *Processor) runAgent(ctx context.Context, update bot.Update, activePendi
 		messages = append(messages, llm.Message{Role: "assistant", ToolCalls: response.ToolCalls})
 		calledTerminal := false
 		for _, call := range response.ToolCalls {
-			call = normalizeToolCall(*update.Text, call)
+			call = normalizeToolCall(*update.Text, turn, call)
 			if isTerminal(call.Name) {
 				calledTerminal = true
 				return p.completeTool(ctx, update, turn, call)
@@ -205,7 +212,7 @@ func trimHistoryToFit(messages []llm.Message, historyMessages int, definitions [
 
 func (p *Processor) completeTool(ctx context.Context, update bot.Update, turn *agent.Turn, call llm.ToolCall) error {
 	if update.Text != nil {
-		call = normalizeToolCall(*update.Text, call)
+		call = normalizeToolCall(*update.Text, turn, call)
 	}
 	err := p.store.Complete(ctx, update.UpdateID, func(ctx context.Context, unit *postgresstore.CompletionUnit) (json.RawMessage, string, error) {
 		transactional := agent.NewExecutor(unit.Expenses)
@@ -519,6 +526,7 @@ func systemPrompt(referenceDate string) string {
 За один ход разрешена одна мутация. Для неполного или неоднозначного запроса используй ask_clarification.
 Если в новом расходе не указана дата, используй текущую дату; не спрашивай дату дополнительно. Категорию выводи из смысла, уточняй только действительно отсутствующую сумму.
 Периоды передавай в date_from/date_to как YYYY-MM-DD. «За неделю» означает последние 7 календарных дней включительно: от текущей даты минус 6 дней до текущей даты.
+Если в запросе общей суммы период не указан, считай расходы за всё время и не уточняй период.
 Если пользователь просит создать или изменить несколько расходов одним сообщением, не выполняй ни один: попроси прислать один расход отдельным сообщением и явно скажи «один расход».
 Для «последнее» или «последний» читай только list_expenses с order=created_at_desc и limit=1, без других фильтров, затем изменяй ровно полученную запись и не проси выбирать её повторно.
 В draft для clarify_create сохраняй известные поля расхода; для clarify_request — original_request; для choose_target — intent и patch при обновлении.
@@ -526,10 +534,15 @@ delete_expense только готовит подтверждение. Не ут
 Категории: food, transport, housing, entertainment, health, shopping, other.`
 }
 
-func normalizeToolCall(input string, call llm.ToolCall) llm.ToolCall {
+func normalizeToolCall(input string, turn *agent.Turn, call llm.ToolCall) llm.ToolCall {
 	input = strings.TrimSpace(input)
 	if call.Name == "list_expenses" && strings.Contains(strings.ToLower(input), "последн") {
 		call.Arguments = json.RawMessage(`{"order":"created_at_desc","limit":1}`)
+		return call
+	}
+	if call.Name == "ask_clarification" && isAllTimeSummaryRequest(input) {
+		call.Name = "summarize_expenses"
+		call.Arguments = json.RawMessage(`{}`)
 		return call
 	}
 	if call.Name == "create_expense" {
@@ -563,14 +576,71 @@ func normalizeToolCall(input string, call llm.ToolCall) llm.ToolCall {
 	var arguments struct {
 		Kind         string            `json:"kind"`
 		Question     string            `json:"question"`
-		Draft        map[string]any    `json:"draft"`
+		Draft        json.RawMessage   `json:"draft"`
 		CandidateIDs []json.RawMessage `json:"candidate_ids"`
 	}
-	if json.Unmarshal(call.Arguments, &arguments) != nil || arguments.Kind != "clarify_request" {
+	if json.Unmarshal(call.Arguments, &arguments) != nil {
+		return call
+	}
+	if arguments.Kind == "choose_target" && strings.Contains(strings.ToLower(input), "удал") && turn != nil && len(turn.Reads) > 1 {
+		var draft map[string]json.RawMessage
+		_ = json.Unmarshal(arguments.Draft, &draft)
+		var intent string
+		_ = json.Unmarshal(draft["intent"], &intent)
+		candidateIDs := make([]string, 0, len(turn.Reads))
+		seen := make(map[int64]struct{})
+		allCandidateIDsAreStrings := true
+		for _, rawID := range arguments.CandidateIDs {
+			var value string
+			if json.Unmarshal(rawID, &value) != nil {
+				allCandidateIDsAreStrings = false
+				value = strings.Trim(string(rawID), `"`)
+			}
+			id, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				continue
+			}
+			if _, exists := turn.Reads[id]; !exists {
+				continue
+			}
+			if _, duplicate := seen[id]; duplicate {
+				continue
+			}
+			seen[id] = struct{}{}
+			candidateIDs = append(candidateIDs, strconv.FormatInt(id, 10))
+		}
+		if allCandidateIDsAreStrings && len(candidateIDs) == len(turn.Reads) && intent == "delete" && len(draft) == 1 {
+			return call
+		}
+		remaining := make([]agent.ReadSnapshot, 0, len(turn.Reads)-len(candidateIDs))
+		for id, candidate := range turn.Reads {
+			if _, exists := seen[id]; !exists {
+				remaining = append(remaining, candidate)
+			}
+		}
+		sort.Slice(remaining, func(i, j int) bool {
+			if remaining[i].SpentAt == remaining[j].SpentAt {
+				return remaining[i].ID > remaining[j].ID
+			}
+			return remaining[i].SpentAt > remaining[j].SpentAt
+		})
+		for _, candidate := range remaining {
+			candidateIDs = append(candidateIDs, strconv.FormatInt(candidate.ID, 10))
+		}
+		encoded, err := json.Marshal(map[string]any{
+			"kind": "choose_target", "question": "Какой расход удалить?",
+			"draft": map[string]string{"intent": "delete"}, "candidate_ids": candidateIDs,
+		})
+		if err == nil {
+			call.Arguments = encoded
+		}
+		return call
+	}
+	if arguments.Kind != "clarify_request" {
 		return call
 	}
 	question := strings.TrimSpace(arguments.Question)
-	if strings.Contains(strings.ToLower(input), " и ") && len(amountPattern.FindAllString(input, -1)) > 1 {
+	if isCompositeExpenseRequest(input) {
 		question = "Пришлите один расход отдельным сообщением."
 	}
 	if question == "" {
@@ -584,6 +654,48 @@ func normalizeToolCall(input string, call llm.ToolCall) llm.ToolCall {
 		call.Arguments = encoded
 	}
 	return call
+}
+
+func (p *Processor) completeKnownRequest(ctx context.Context, update bot.Update, turn *agent.Turn, executor *agent.Executor, clearPending bool) (bool, error) {
+	if update.Text == nil {
+		return false, nil
+	}
+	input := strings.TrimSpace(*update.Text)
+	if isAllTimeSummaryRequest(input) {
+		result, err := executor.Execute(ctx, turn, agent.Call{Name: "summarize_expenses", Arguments: json.RawMessage(`{}`)})
+		if err != nil {
+			return true, err
+		}
+		payload, reply, err := resultAndReply(result)
+		if err != nil {
+			return true, err
+		}
+		return true, p.completeAgentMessage(ctx, update.UpdateID, "summary_fallback", reply, payload, clearPending)
+	}
+	if !isCompositeExpenseRequest(input) {
+		return false, nil
+	}
+	arguments, err := json.Marshal(map[string]any{
+		"kind": "clarify_request", "question": "Пришлите один расход отдельным сообщением.",
+		"draft": map[string]string{"original_request": input},
+	})
+	if err != nil {
+		return true, err
+	}
+	return true, p.completeTool(ctx, update, turn, llm.ToolCall{Name: "ask_clarification", Arguments: arguments})
+}
+
+func isAllTimeSummaryRequest(input string) bool {
+	switch normalizeAnswer(input) {
+	case "сколько потратил", "сколько всего потратил", "сколько я потратил", "сколько всего я потратил":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCompositeExpenseRequest(input string) bool {
+	return strings.Contains(strings.ToLower(input), " и ") && len(amountPattern.FindAllString(input, -1)) > 1
 }
 
 func toolError(err error) string {

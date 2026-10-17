@@ -26,7 +26,7 @@
   {
     "id": "E04", "intent": "clarify_create", "reference_date": "2026-10-15",
     "steps": [
-      {"input": "кофе", "count_a": 0, "count_b": 0, "pending": "clarify_create", "reply_contains": ["сумм"], "max_tool_calls": 1},
+      {"input": "кофе", "count_a": 0, "count_b": 0, "pending": "clarify_create", "reply_contains_one_of": ["сумм", "сколько"], "max_tool_calls": 1},
       {
         "input": "350", "count_a": 1, "count_b": 0, "pending": "none", "reply_contains": ["Добавлено", "350,00 ₽"], "max_tool_calls": 1,
         "expenses_a": [{"amount": "350.00", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"}]

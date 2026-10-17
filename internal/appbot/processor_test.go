@@ -97,7 +97,7 @@ func TestChoiceReplyUsesSavedCandidateFacts(t *testing.T) {
 
 func TestNormalizeTerminalCallAsksForMissingAmount(t *testing.T) {
 	t.Parallel()
-	call := normalizeToolCall("кофе", llm.ToolCall{
+	call := normalizeToolCall("кофе", nil, llm.ToolCall{
 		Name: "create_expense", Arguments: []byte(`{"category":"food","spent_at":"2026-10-15","comment":"кофе"}`),
 	})
 	if call.Name != "ask_clarification" || !strings.Contains(string(call.Arguments), "clarify_create") || !strings.Contains(string(call.Arguments), "Укажите сумму") {
@@ -107,7 +107,7 @@ func TestNormalizeTerminalCallAsksForMissingAmount(t *testing.T) {
 
 func TestNormalizeTerminalCallRepairsCompositeClarification(t *testing.T) {
 	t.Parallel()
-	call := normalizeToolCall("кофе 100 и такси 200", llm.ToolCall{
+	call := normalizeToolCall("кофе 100 и такси 200", nil, llm.ToolCall{
 		Name: "ask_clarification", Arguments: []byte(`{"kind":"clarify_request","question":"Что добавить?","draft":{}}`),
 	})
 	if !strings.Contains(string(call.Arguments), "один расход") || !strings.Contains(string(call.Arguments), "original_request") {
@@ -117,10 +117,40 @@ func TestNormalizeTerminalCallRepairsCompositeClarification(t *testing.T) {
 
 func TestNormalizeToolCallReadsLatestByCreationOrder(t *testing.T) {
 	t.Parallel()
-	call := normalizeToolCall("последнее было не 200, а 250", llm.ToolCall{
+	call := normalizeToolCall("последнее было не 200, а 250", nil, llm.ToolCall{
 		Name: "list_expenses", Arguments: []byte(`{"query":"200","order":"spent_at_desc","limit":20}`),
 	})
 	if string(call.Arguments) != `{"order":"created_at_desc","limit":1}` {
 		t.Fatalf("normalized call arguments = %s", call.Arguments)
+	}
+}
+
+func TestNormalizeToolCallRepairsDeleteChoice(t *testing.T) {
+	t.Parallel()
+	turn := &agent.Turn{Reads: map[int64]agent.ReadSnapshot{
+		1: {ID: 1, SpentAt: "2026-10-14"}, 2: {ID: 2, SpentAt: "2026-10-15"},
+	}}
+	call := normalizeToolCall("удали такси", turn, llm.ToolCall{
+		Name: "ask_clarification", Arguments: []byte(`{"kind":"choose_target","question":"Какой?","draft":{},"candidate_ids":[2,1]}`),
+	})
+	for _, want := range []string{`"intent":"delete"`, `"candidate_ids":["2","1"]`} {
+		if !strings.Contains(string(call.Arguments), want) {
+			t.Fatalf("normalized call arguments = %s; want %s", call.Arguments, want)
+		}
+	}
+}
+
+func TestKnownRequestDetection(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"сколько потратил", "Сколько всего я потратил?"} {
+		if !isAllTimeSummaryRequest(input) {
+			t.Errorf("%q was not detected as all-time summary", input)
+		}
+	}
+	if isAllTimeSummaryRequest("сколько потратил на еду") {
+		t.Fatal("filtered summary was detected as all-time summary")
+	}
+	if !isCompositeExpenseRequest("кофе 100 и такси 200") {
+		t.Fatal("composite expense request was not detected")
 	}
 }
