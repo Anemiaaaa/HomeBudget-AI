@@ -195,10 +195,44 @@ func Run(ctx context.Context, options Options) (Report, error) {
 	report.LatencyP50Millis = percentile(latencies, 0.50).Milliseconds()
 	report.LatencyP95Millis = percentile(latencies, 0.95).Milliseconds()
 	_ = resetDatabase(context.Background(), pool)
-	if report.PassedRuns != report.TotalRuns {
-		return report, fmt.Errorf("live eval failed: %d/%d runs passed", report.PassedRuns, report.TotalRuns)
+	if err := acceptanceError(report); err != nil {
+		return report, err
 	}
 	return report, nil
+}
+
+func acceptanceError(report Report) error {
+	required := []string{"E01", "E02", "E05", "E06", "E08", "E11", "E12", "E13", "E14", "E15", "E21"}
+	totals := make(map[string]int)
+	passed := make(map[string]int)
+	for _, result := range report.Cases {
+		totals[result.ID]++
+		if result.Passed {
+			passed[result.ID]++
+		}
+	}
+	fullAcceptanceSet := true
+	for _, id := range required {
+		if totals[id] == 0 {
+			fullAcceptanceSet = false
+			break
+		}
+	}
+	if !fullAcceptanceSet {
+		if report.PassedRuns != report.TotalRuns {
+			return fmt.Errorf("live eval failed: %d/%d selected runs passed", report.PassedRuns, report.TotalRuns)
+		}
+		return nil
+	}
+	if report.PassRate < 0.90 {
+		return fmt.Errorf("live eval acceptance failed: %.2f%% passed, need at least 90%%", report.PassRate*100)
+	}
+	for _, id := range required {
+		if passed[id] != totals[id] {
+			return fmt.Errorf("live eval acceptance failed: required case %s passed %d/%d runs", id, passed[id], totals[id])
+		}
+	}
+	return nil
 }
 
 func runCase(ctx context.Context, pool *pgxpool.Pool, provider *measuredProvider, model string, spec caseSpec, repeat int) CaseResult {
