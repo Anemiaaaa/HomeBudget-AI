@@ -95,6 +95,26 @@ docker run --rm --network test-task-expenses_default -e TEST_DATABASE_URL="postg
 docker run --rm --network test-task-expenses_default -e TEST_DATABASE_URL="postgres://expenses:expenses@db:5432/expenses?sslmode=disable" -v "${PWD}:/src" -w /src golang:1.25-alpine go test -p 1 -tags integration ./internal/appbot -run TestOfflineAgentEval -v
 ```
 
+Clean-start проверка поднимает отдельный Compose-проект на порту `18080`, создаёт расход, перезапускает PostgreSQL и приложение, проверяет сохранность записи и удаляет только свои временные контейнеры и volume:
+
+```powershell
+./scripts/clean-start.ps1
+```
+
+### Live eval
+
+Live eval не использует Telegram и запускается с отдельной временной PostgreSQL. Нужен OpenAI-compatible endpoint с поддержкой `POST /chat/completions` и function tools. Заполните в локальном `.env` только `LLM_BASE_URL`, `LLM_MODEL` и при необходимости `LLM_API_KEY`, затем выполните:
+
+```powershell
+$env:LIVE_EVAL_COMMIT = (git rev-parse HEAD)
+docker compose --profile eval run --rm --build live-eval
+docker compose --profile eval rm -sf eval-db
+```
+
+Runner выполняет 19 языковых сценариев по три раза. Отчёт сохраняется в `evals/reports/latest.json`: модель, commit, версия prompt, результат каждого прогона, tool calls, token usage и задержки p50/p95. Промпты, ключи и DSN в отчёт не попадают. Обычная рабочая БД и Telegram polling offset не затрагиваются.
+
+Если выбранная модель поддерживает tools только через Responses API, она не совместима с текущим OpenAI-compatible Chat Completions адаптером — для тестового задания следует указать модель провайдера, которая поддерживает `/chat/completions` с `tools`.
+
 Smoke-команда внешних интеграций не пишет в базу и не отправляет сообщения:
 
 ```bash

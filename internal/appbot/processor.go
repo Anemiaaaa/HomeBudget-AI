@@ -22,6 +22,8 @@ type Provider interface {
 	Chat(context.Context, llm.ChatRequest) (llm.ChatResponse, error)
 }
 
+const PromptVersion = "2026-10-17.1"
+
 type Store interface {
 	ClaimNext(context.Context) (bot.Update, error)
 	Complete(context.Context, int64, postgresstore.Completion) error

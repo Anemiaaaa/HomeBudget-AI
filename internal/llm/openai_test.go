@@ -33,3 +33,13 @@ func TestProbeExpenseTool(t *testing.T) {
 		t.Fatalf("tool name = %q", call.Name)
 	}
 }
+
+func TestOpenAIClientRejectsRemotePlainHTTP(t *testing.T) {
+	t.Parallel()
+	if _, err := NewOpenAIClient("http://provider.example/v1", "", nil); err == nil {
+		t.Fatal("remote plain HTTP URL was accepted")
+	}
+	if _, err := NewOpenAIClient("http://localhost:11434/v1", "", nil); err != nil {
+		t.Fatalf("loopback HTTP URL was rejected: %v", err)
+	}
+}

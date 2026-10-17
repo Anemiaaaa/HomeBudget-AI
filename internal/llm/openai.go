@@ -30,10 +30,18 @@ func NewOpenAIClient(baseURL, apiKey string, httpClient *http.Client) (*OpenAICl
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, errors.New("LLM base URL is invalid")
 	}
+	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname())) {
+		return nil, errors.New("LLM base URL must use HTTPS; HTTP is allowed only for loopback hosts")
+	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	return &OpenAIClient{baseURL: baseURL, apiKey: strings.TrimSpace(apiKey), httpClient: httpClient}, nil
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func (c *OpenAIClient) ProbeExpenseTool(ctx context.Context, model string) (ToolCall, error) {

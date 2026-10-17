@@ -38,7 +38,7 @@ services:
       AGENT_MAX_CONTEXT_BYTES: ${AGENT_MAX_CONTEXT_BYTES:-32768}
       AGENT_TURN_TIMEOUT: ${AGENT_TURN_TIMEOUT:-60s}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${HTTP_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/readyz"]
       interval: 5s
@@ -46,6 +46,42 @@ services:
       retries: 10
       start_period: 5s
     restart: unless-stopped
+
+  eval-db:
+    profiles: ["eval"]
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: expenses_eval
+      POSTGRES_USER: expenses
+      POSTGRES_PASSWORD: expenses
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U expenses -d expenses_eval"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+    tmpfs:
+      - /var/lib/postgresql
+
+  live-eval:
+    profiles: ["eval"]
+    build: .
+    depends_on:
+      eval-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://expenses:expenses@eval-db:5432/expenses_eval?sslmode=disable
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-30s}
+      LIVE_EVAL_REPEATS: ${LIVE_EVAL_REPEATS:-3}
+      LIVE_EVAL_COMMIT: ${LIVE_EVAL_COMMIT:-unknown}
+      LIVE_EVAL_REPORT: /app/evals/reports/latest.json
+    volumes:
+      - ./evals:/app/evals
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/live-eval"]
 
 volumes:
   expenses_data:
