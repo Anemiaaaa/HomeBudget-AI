@@ -54,7 +54,7 @@ func TestPollingWebhookAndSendMessage(t *testing.T) {
 			if body.Offset != 42 || body.Timeout != 25 || len(body.AllowedUpdates) != 1 || body.AllowedUpdates[0] != "message" {
 				t.Errorf("getUpdates body = %+v", body)
 			}
-			_, _ = writer.Write([]byte(`{"ok":true,"result":[{"update_id":42,"message":{"message_id":5,"from":{"id":101,"first_name":"Amir"},"chat":{"id":501,"type":"private"},"date":1792076400,"text":"кофе 350"}}]}`))
+			_, _ = writer.Write([]byte(`{"ok":true,"result":[{"update_id":42,"message":{"message_id":5,"from":{"id":101,"first_name":"Test"},"chat":{"id":501,"type":"private"},"date":1792076400,"text":"кофе 350"}}]}`))
 		case "/bottest-token/sendMessage":
 			var body struct {
 				ChatID int64  `json:"chat_id"`
