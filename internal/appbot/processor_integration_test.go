@@ -127,14 +127,13 @@ func TestProcessorCreateDeleteConfirmationAndDelivery(t *testing.T) {
 		t.Fatalf("sent messages = %v", sender.messages)
 	}
 
-	provider.responses = append(provider.responses, llm.ChatResponse{ToolCalls: []llm.ToolCall{{
-		ID: "clarify_1", Name: "ask_clarification", Arguments: json.RawMessage(`{
-			"kind":"clarify_create","question":"Какая сумма?","draft":{"comment":"кофе","category":"food","spent_at":"сегодня"}
-		}`),
-	}}})
+	providerCallsBeforeClarification := len(provider.calls)
 	ingestMessage(t, ctx, store, 4, 101, 501, "кофе", "2026-10-15")
 	if err := processor.ProcessOne(ctx); err != nil {
 		t.Fatalf("ProcessOne(clarification) error = %v", err)
+	}
+	if len(provider.calls) != providerCallsBeforeClarification {
+		t.Fatal("deterministic amount clarification unexpectedly called the LLM")
 	}
 	session, err = store.LoadSession(ctx, 101, 501)
 	if err != nil || !strings.Contains(string(session.PendingAction), "clarify_create") || !strings.Contains(string(session.PendingAction), "reference_date") {

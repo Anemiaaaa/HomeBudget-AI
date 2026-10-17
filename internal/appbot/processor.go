@@ -116,6 +116,10 @@ func (p *Processor) ProcessOne(ctx context.Context) error {
 		if isConfirm(answer) || isCancel(answer) {
 			return p.completeMessage(ctx, update.UpdateID, "no_pending_action", "Нет действия, которое ожидает подтверждения.", nil)
 		}
+		if isLikelyIncompleteExpense(*update.Text) {
+			turn := &agent.Turn{OwnerID: *update.UserID, ReferenceDate: *update.ReferenceDate}
+			return p.completeTool(ctx, update, turn, missingAmountCall(*update.Text))
+		}
 	}
 	history, err := p.store.LoadHistory(ctx, *update.UserID, *update.ChatID, update.UpdateID, 6)
 	if err != nil {
@@ -565,18 +569,7 @@ func normalizeToolCall(input string, turn *agent.Turn, call llm.ToolCall) llm.To
 		if amount != "" {
 			return call
 		}
-		draft := map[string]any{}
-		if input != "" && len([]rune(input)) <= 500 {
-			draft["comment"] = input
-		}
-		encoded, err := json.Marshal(map[string]any{
-			"kind": "clarify_create", "question": "Укажите сумму расхода.", "draft": draft,
-		})
-		if err == nil {
-			call.Name = "ask_clarification"
-			call.Arguments = encoded
-		}
-		return call
+		return missingAmountCall(input)
 	}
 	if call.Name != "ask_clarification" {
 		return call
@@ -661,6 +654,18 @@ func normalizeToolCall(input string, turn *agent.Turn, call llm.ToolCall) llm.To
 	return call
 }
 
+func missingAmountCall(input string) llm.ToolCall {
+	draft := map[string]any{}
+	input = strings.TrimSpace(input)
+	if input != "" && len([]rune(input)) <= 500 {
+		draft["comment"] = input
+	}
+	arguments, _ := json.Marshal(map[string]any{
+		"kind": "clarify_create", "question": "Укажите сумму расхода.", "draft": draft,
+	})
+	return llm.ToolCall{Name: "ask_clarification", Arguments: arguments}
+}
+
 func normalizeToolCalls(input string, calls []llm.ToolCall) []llm.ToolCall {
 	if len(calls) < 2 || len(calls) > 10 || !isCompositeExpenseRequest(input) {
 		return calls
@@ -709,6 +714,31 @@ func isAllTimeSummaryRequest(input string) bool {
 
 func isCompositeExpenseRequest(input string) bool {
 	return strings.Contains(strings.ToLower(input), " и ") && len(amountPattern.FindAllString(input, -1)) > 1
+}
+
+func isLikelyIncompleteExpense(input string) bool {
+	if amountPattern.MatchString(input) || strings.ContainsAny(input, "?!") {
+		return false
+	}
+	normalized := normalizeAnswer(input)
+	if normalized == "" || looksLikeNewRequest(normalized) {
+		return false
+	}
+	words := strings.Fields(normalized)
+	if len(words) == 0 || len(words) > 4 {
+		return false
+	}
+	for _, phrase := range []string{"привет", "здравствуй", "добрый день", "добрый вечер", "спасибо", "что ты умеешь", "помоги", "начать"} {
+		if normalized == phrase {
+			return false
+		}
+	}
+	for _, prefix := range []string{"кто ", "что ", "как ", "зачем ", "почему ", "можно "} {
+		if strings.HasPrefix(normalized, prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 func toolError(err error) string {

@@ -27,9 +27,8 @@
     "steps": [
       {
         "input": "кофе",
-        "responses": [{"tools": [{"id": "clarify", "name": "ask_clarification", "arguments": {"kind": "clarify_create", "question": "Какая сумма?", "draft": {"category": "food", "spent_at": "сегодня", "comment": "кофе"}}}]}],
         "total_count": 0,
-        "reply_contains": ["Какая сумма?"]
+        "reply_contains": ["Укажите сумму"]
       },
       {
         "input": "350",

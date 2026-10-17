@@ -156,6 +156,20 @@ func TestKnownRequestDetection(t *testing.T) {
 	}
 }
 
+func TestIncompleteExpenseDetection(t *testing.T) {
+	t.Parallel()
+	for _, input := range []string{"кофе", "такси вчера", "обед на работе"} {
+		if !isLikelyIncompleteExpense(input) {
+			t.Errorf("%q was not detected as an incomplete expense", input)
+		}
+	}
+	for _, input := range []string{"кофе 350", "покажи расходы", "сколько потратил?", "привет", "что ты умеешь"} {
+		if isLikelyIncompleteExpense(input) {
+			t.Errorf("%q was unexpectedly detected as an incomplete expense", input)
+		}
+	}
+}
+
 func TestTelegramCommandSupportsBotSuffixAndStartPayload(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{
