@@ -154,3 +154,28 @@ func TestKnownRequestDetection(t *testing.T) {
 		t.Fatal("composite expense request was not detected")
 	}
 }
+
+func TestTelegramCommandSupportsBotSuffixAndStartPayload(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"/start":                   "/start",
+		"/start campaign":          "/start",
+		"/HELP@ai_home_budget_bot": "/help",
+		"кофе 350":                 "",
+	}
+	for input, want := range tests {
+		if got := telegramCommand(input); got != want {
+			t.Errorf("telegramCommand(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestWelcomeExplainsNaturalLanguageAndOwnerScope(t *testing.T) {
+	t.Parallel()
+	message := welcomeMessage()
+	for _, want := range []string{"кофе 350", "покажи траты за неделю", "только свои расходы", "/help"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("welcome message does not contain %q", want)
+		}
+	}
+}

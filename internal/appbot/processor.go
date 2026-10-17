@@ -88,6 +88,12 @@ func (p *Processor) ProcessOne(ctx context.Context) error {
 	if update.UserID == nil || update.ChatID == nil || update.ReferenceDate == nil || update.Text == nil {
 		return p.completeMessage(ctx, update.UpdateID, "unsupported_update", "Не удалось обработать это сообщение.", nil)
 	}
+	switch telegramCommand(*update.Text) {
+	case "/start":
+		return p.completeAgentMessage(ctx, update.UpdateID, "welcome", welcomeMessage(), nil, true)
+	case "/help":
+		return p.completeMessage(ctx, update.UpdateID, "help", helpMessage(), nil)
+	}
 
 	session, err := p.store.LoadSession(ctx, *update.UserID, *update.ChatID)
 	if err != nil {
@@ -314,7 +320,7 @@ func (p *Processor) handlePending(ctx context.Context, update bot.Update, raw js
 			return nil, "", err
 		}
 		result, _ := json.Marshal(map[string]string{"status": "deleted", "expense_id": pending.ExpenseID})
-		return result, "Расход №" + pending.ExpenseID + " удалён.", nil
+		return result, "Расход №" + pending.ExpenseID + " удалён.\n\nДальше можно: «покажи траты за неделю».", nil
 	})
 	if err == nil {
 		return true, nil
@@ -747,6 +753,42 @@ func normalizeAnswer(value string) string {
 	return strings.Join(fields, " ")
 }
 
+func telegramCommand(value string) string {
+	fields := strings.Fields(strings.TrimSpace(value))
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
+		return ""
+	}
+	command := strings.ToLower(fields[0])
+	if index := strings.IndexByte(command, '@'); index >= 0 {
+		command = command[:index]
+	}
+	return command
+}
+
+func welcomeMessage() string {
+	return `HomeBudget — учёт личных расходов
+
+Пишите обычным текстом — без специальных команд:
+• «кофе 350»
+• «такси 1200 вчера»
+• «покажи траты за неделю»
+• «сколько потратил на еду в этом месяце»
+• «последнее было не 350, а 450»
+• «удали такси»
+
+В Telegram каждый участник видит и изменяет только свои расходы. Для повторной справки отправьте /help.`
+}
+
+func helpMessage() string {
+	return `Что умеет HomeBudget:
+• добавлять расходы и понимать дату из текста;
+• показывать список за выбранный период;
+• считать точную сумму по категории;
+• исправлять и удалять ваши записи.
+
+Просто напишите запрос своими словами. Например: «обед 450 сегодня» или «покажи траты за неделю».`
+}
+
 func isConfirm(value string) bool {
 	return value == "да" || value == "да удали" || value == "подтверждаю"
 }
@@ -786,7 +828,8 @@ func resultAndReply(result agent.Result) (json.RawMessage, string, error) {
 		if result.Name == "update_expense" {
 			verb = "Обновлено"
 		}
-		return payload, fmt.Sprintf("%s: %s — %s, %s, %s. №%s", verb, title(item), rubles(item.Amount), categoryLabel(item.Category), displayDate(item.SpentAt), item.ID), nil
+		reply := fmt.Sprintf("%s: %s — %s, %s, %s. №%s", verb, title(item), rubles(item.Amount), categoryLabel(item.Category), displayDate(item.SpentAt), item.ID)
+		return payload, reply + "\n\nДальше можно: «покажи траты за неделю».", nil
 	case "delete_expense":
 		var prepared struct {
 			Expense expenseView `json:"expense"`
@@ -820,7 +863,7 @@ func resultAndReply(result agent.Result) (json.RawMessage, string, error) {
 		if err := json.Unmarshal(payload, &summary); err != nil {
 			return nil, "", err
 		}
-		return payload, fmt.Sprintf("Итого: %s, операций: %d.", rubles(summary.TotalAmount), summary.Count), nil
+		return payload, fmt.Sprintf("Итого: %s, операций: %d.\n\nМожно написать: «покажи траты за неделю».", rubles(summary.TotalAmount), summary.Count), nil
 	case "list_expenses":
 		var list struct {
 			Items []expenseView `json:"items"`
@@ -836,7 +879,7 @@ func resultAndReply(result agent.Result) (json.RawMessage, string, error) {
 		for _, item := range list.Items {
 			lines = append(lines, fmt.Sprintf("• %s — %s, %s, №%s", displayDate(item.SpentAt), rubles(item.Amount), title(item), item.ID))
 		}
-		return payload, strings.Join(lines, "\n"), nil
+		return payload, strings.Join(lines, "\n") + "\n\nМожно спросить: «сколько потратил на еду в этом месяце».", nil
 	default:
 		return nil, "", errors.New("unsupported tool result")
 	}
