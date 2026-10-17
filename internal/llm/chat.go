@@ -83,6 +83,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, input ChatRequest) (ChatRespons
 		"model": input.Model, "messages": messages, "tools": input.Tools,
 		"tool_choice": "auto", "temperature": 0, "max_tokens": input.MaxTokens,
 	}
+	applyChatCompatibility(payload, input.Model)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("encode LLM chat request: %w", err)

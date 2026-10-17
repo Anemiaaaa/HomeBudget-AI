@@ -43,3 +43,18 @@ func TestOpenAIClientRejectsRemotePlainHTTP(t *testing.T) {
 		t.Fatalf("loopback HTTP URL was rejected: %v", err)
 	}
 }
+
+func TestGPT56ChatCompatibilityDisablesReasoning(t *testing.T) {
+	t.Parallel()
+	payload := map[string]any{}
+	applyChatCompatibility(payload, "openai/gpt-5.6-luna")
+	if payload["reasoning_effort"] != "none" {
+		t.Fatalf("reasoning_effort = %v", payload["reasoning_effort"])
+	}
+
+	regular := map[string]any{}
+	applyChatCompatibility(regular, "gpt-4.1-mini")
+	if _, exists := regular["reasoning_effort"]; exists {
+		t.Fatal("reasoning_effort was added for an unrelated model")
+	}
+}

@@ -75,6 +75,7 @@ func (c *OpenAIClient) ProbeExpenseTool(ctx context.Context, model string) (Tool
 		"tool_choice": map[string]any{"type": "function", "function": map[string]string{"name": "create_expense"}},
 		"temperature": 0,
 	}
+	applyChatCompatibility(payload, model)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return ToolCall{}, err
@@ -126,6 +127,13 @@ func (c *OpenAIClient) ProbeExpenseTool(ctx context.Context, model string) (Tool
 		return ToolCall{}, errors.New("LLM response contained an invalid create_expense call")
 	}
 	return ToolCall{ID: first.ID, Name: first.Function.Name, Arguments: arguments}, nil
+}
+
+func applyChatCompatibility(payload map[string]any, model string) {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if strings.Contains(normalized, "gpt-5.6-") {
+		payload["reasoning_effort"] = "none"
+	}
 }
 
 func compactError(body []byte) string {
