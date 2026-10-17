@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +23,9 @@ type Provider interface {
 	Chat(context.Context, llm.ChatRequest) (llm.ChatResponse, error)
 }
 
-const PromptVersion = "2026-10-17.2"
+const PromptVersion = "2026-10-17.3"
+
+var amountPattern = regexp.MustCompile(`\d+(?:[.,]\d{1,2})?`)
 
 type Store interface {
 	ClaimNext(context.Context) (bot.Update, error)
@@ -167,6 +170,7 @@ func (p *Processor) runAgent(ctx context.Context, update bot.Update, activePendi
 		messages = append(messages, llm.Message{Role: "assistant", ToolCalls: response.ToolCalls})
 		calledTerminal := false
 		for _, call := range response.ToolCalls {
+			call = normalizeToolCall(*update.Text, call)
 			if isTerminal(call.Name) {
 				calledTerminal = true
 				return p.completeTool(ctx, update, turn, call)
@@ -200,6 +204,9 @@ func trimHistoryToFit(messages []llm.Message, historyMessages int, definitions [
 }
 
 func (p *Processor) completeTool(ctx context.Context, update bot.Update, turn *agent.Turn, call llm.ToolCall) error {
+	if update.Text != nil {
+		call = normalizeToolCall(*update.Text, call)
+	}
 	err := p.store.Complete(ctx, update.UpdateID, func(ctx context.Context, unit *postgresstore.CompletionUnit) (json.RawMessage, string, error) {
 		transactional := agent.NewExecutor(unit.Expenses)
 		result, err := transactional.Execute(ctx, turn, agent.Call{Name: call.Name, Arguments: call.Arguments})
@@ -513,9 +520,70 @@ func systemPrompt(referenceDate string) string {
 Если в новом расходе не указана дата, используй текущую дату; не спрашивай дату дополнительно. Категорию выводи из смысла, уточняй только действительно отсутствующую сумму.
 Периоды передавай в date_from/date_to как YYYY-MM-DD. «За неделю» означает последние 7 календарных дней включительно: от текущей даты минус 6 дней до текущей даты.
 Если пользователь просит создать или изменить несколько расходов одним сообщением, не выполняй ни один: попроси прислать один расход отдельным сообщением и явно скажи «один расход».
+Для «последнее» или «последний» читай только list_expenses с order=created_at_desc и limit=1, без других фильтров, затем изменяй ровно полученную запись и не проси выбирать её повторно.
 В draft для clarify_create сохраняй известные поля расхода; для clarify_request — original_request; для choose_target — intent и patch при обновлении.
 delete_expense только готовит подтверждение. Не утверждай, что данные изменены, без успешного tool result.
 Категории: food, transport, housing, entertainment, health, shopping, other.`
+}
+
+func normalizeToolCall(input string, call llm.ToolCall) llm.ToolCall {
+	input = strings.TrimSpace(input)
+	if call.Name == "list_expenses" && strings.Contains(strings.ToLower(input), "последн") {
+		call.Arguments = json.RawMessage(`{"order":"created_at_desc","limit":1}`)
+		return call
+	}
+	if call.Name == "create_expense" {
+		var arguments map[string]json.RawMessage
+		if json.Unmarshal(call.Arguments, &arguments) != nil {
+			return call
+		}
+		var amount string
+		if raw, exists := arguments["amount"]; exists {
+			_ = json.Unmarshal(raw, &amount)
+		}
+		if amount != "" {
+			return call
+		}
+		draft := map[string]any{}
+		if input != "" && len([]rune(input)) <= 500 {
+			draft["comment"] = input
+		}
+		encoded, err := json.Marshal(map[string]any{
+			"kind": "clarify_create", "question": "Укажите сумму расхода.", "draft": draft,
+		})
+		if err == nil {
+			call.Name = "ask_clarification"
+			call.Arguments = encoded
+		}
+		return call
+	}
+	if call.Name != "ask_clarification" {
+		return call
+	}
+	var arguments struct {
+		Kind         string            `json:"kind"`
+		Question     string            `json:"question"`
+		Draft        map[string]any    `json:"draft"`
+		CandidateIDs []json.RawMessage `json:"candidate_ids"`
+	}
+	if json.Unmarshal(call.Arguments, &arguments) != nil || arguments.Kind != "clarify_request" {
+		return call
+	}
+	question := strings.TrimSpace(arguments.Question)
+	if strings.Contains(strings.ToLower(input), " и ") && len(amountPattern.FindAllString(input, -1)) > 1 {
+		question = "Пришлите один расход отдельным сообщением."
+	}
+	if question == "" {
+		question = "Уточните запрос."
+	}
+	encoded, err := json.Marshal(map[string]any{
+		"kind": "clarify_request", "question": question,
+		"draft": map[string]string{"original_request": input},
+	})
+	if err == nil {
+		call.Arguments = encoded
+	}
+	return call
 }
 
 func toolError(err error) string {

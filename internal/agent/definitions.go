@@ -34,7 +34,7 @@ func Definitions() []Definition {
 			map[string]any{"amount": money, "category": category, "spent_at": date, "comment": map[string]any{"type": "string", "maxLength": 500}},
 			"amount", "category", "spent_at",
 		)),
-		function("list_expenses", "Read only the authenticated owner's expenses before answering or changing them", object(
+		function("list_expenses", "Read only the authenticated owner's expenses before answering or changing them. For 'last/latest expense', use only order=created_at_desc and limit=1 without filters", object(
 			map[string]any{
 				"expense_id": identifier, "category": category, "date_from": date, "date_to": date,
 				"query":  map[string]any{"type": "string", "maxLength": 200},

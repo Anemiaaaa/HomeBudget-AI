@@ -14,6 +14,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/app ./c
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/smoke ./cmd/smoke
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/live-eval ./cmd/live-eval
 
+FROM build AS test
+RUN go test ./...
+RUN go vet ./...
+
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata && addgroup -S app && adduser -S -G app app
 COPY --from=build /out/app /usr/local/bin/app

@@ -94,3 +94,33 @@ func TestChoiceReplyUsesSavedCandidateFacts(t *testing.T) {
 		t.Fatalf("reply contains untrusted model claim: %q", reply)
 	}
 }
+
+func TestNormalizeTerminalCallAsksForMissingAmount(t *testing.T) {
+	t.Parallel()
+	call := normalizeToolCall("кофе", llm.ToolCall{
+		Name: "create_expense", Arguments: []byte(`{"category":"food","spent_at":"2026-10-15","comment":"кофе"}`),
+	})
+	if call.Name != "ask_clarification" || !strings.Contains(string(call.Arguments), "clarify_create") || !strings.Contains(string(call.Arguments), "Укажите сумму") {
+		t.Fatalf("normalized call = %+v", call)
+	}
+}
+
+func TestNormalizeTerminalCallRepairsCompositeClarification(t *testing.T) {
+	t.Parallel()
+	call := normalizeToolCall("кофе 100 и такси 200", llm.ToolCall{
+		Name: "ask_clarification", Arguments: []byte(`{"kind":"clarify_request","question":"Что добавить?","draft":{}}`),
+	})
+	if !strings.Contains(string(call.Arguments), "один расход") || !strings.Contains(string(call.Arguments), "original_request") {
+		t.Fatalf("normalized call arguments = %s", call.Arguments)
+	}
+}
+
+func TestNormalizeToolCallReadsLatestByCreationOrder(t *testing.T) {
+	t.Parallel()
+	call := normalizeToolCall("последнее было не 200, а 250", llm.ToolCall{
+		Name: "list_expenses", Arguments: []byte(`{"query":"200","order":"spent_at_desc","limit":20}`),
+	})
+	if string(call.Arguments) != `{"order":"created_at_desc","limit":1}` {
+		t.Fatalf("normalized call arguments = %s", call.Arguments)
+	}
+}
