@@ -30,6 +30,19 @@ func (s *ownerExpensesStub) Create(_ context.Context, ownerID int64, fields expe
 	return expense.Expense{ID: 9, UserID: ownerID, Amount: amount, Category: fields.Category, SpentAt: date, Comment: fields.Comment, Version: 1}, nil
 }
 
+func (s *ownerExpensesStub) CreateMany(ctx context.Context, ownerID int64, fields []expense.CreateFields, reference expense.Date) ([]expense.Expense, error) {
+	created := make([]expense.Expense, 0, len(fields))
+	for _, item := range fields {
+		expenseItem, err := s.Create(ctx, ownerID, item, reference)
+		if err != nil {
+			return nil, err
+		}
+		expenseItem.ID = int64(len(created) + 1)
+		created = append(created, expenseItem)
+	}
+	return created, nil
+}
+
 func (s *ownerExpensesStub) Get(_ context.Context, ownerID, id int64) (expense.Expense, error) {
 	s.lastOwner = ownerID
 	for _, item := range s.items {
@@ -82,8 +95,27 @@ func TestDefinitionsExcludeTrustedScope(t *testing.T) {
 	if strings.Contains(text, "user_id") || strings.Contains(text, "admin") || strings.Contains(text, "role") {
 		t.Fatalf("tool definitions expose trusted scope: %s", text)
 	}
-	if len(Definitions()) != 6 || strings.Count(text, `"additionalProperties":false`) < 7 {
+	if len(Definitions()) != 7 || strings.Count(text, `"additionalProperties":false`) < 9 {
 		t.Fatalf("tool definitions are not strict: %s", text)
+	}
+}
+
+func TestCreateManyUsesOneTerminalTool(t *testing.T) {
+	t.Parallel()
+	stub := &ownerExpensesStub{}
+	turn := &Turn{OwnerID: 101, ReferenceDate: mustDate("2026-10-15")}
+	result, err := NewExecutor(stub).Execute(context.Background(), turn, Call{Name: "create_expenses", Arguments: json.RawMessage(`{
+		"expenses":[
+			{"amount":"100","category":"food","spent_at":"сегодня","comment":"кофе"},
+			{"amount":"200","category":"transport","spent_at":"вчера","comment":"такси"}
+		]
+	}`)})
+	if err != nil {
+		t.Fatalf("Execute(create many) error = %v", err)
+	}
+	payload, ok := result.Payload.(createManyPayload)
+	if !ok || payload.Count != 2 || len(payload.Items) != 2 || stub.creates != 2 || !turn.Finished || !result.Mutated {
+		t.Fatalf("result = %+v, stub = %+v, turn = %+v", result, stub, turn)
 	}
 }
 

@@ -20,6 +20,10 @@ func Definitions() []Definition {
 		"amount": money, "category": category, "spent_at": date,
 		"comment": map[string]any{"type": []string{"string", "null"}, "maxLength": 500},
 	})
+	createExpense := object(
+		map[string]any{"amount": money, "category": category, "spent_at": date, "comment": map[string]any{"type": "string", "maxLength": 500}},
+		"amount", "category", "spent_at",
+	)
 	draft := object(map[string]any{
 		"amount": money, "category": category, "spent_at": date,
 		"comment":             map[string]any{"type": "string", "maxLength": 500},
@@ -30,9 +34,10 @@ func Definitions() []Definition {
 	})
 
 	return []Definition{
-		function("create_expense", "Create one expense for the authenticated owner", object(
-			map[string]any{"amount": money, "category": category, "spent_at": date, "comment": map[string]any{"type": "string", "maxLength": 500}},
-			"amount", "category", "spent_at",
+		function("create_expense", "Create one expense for the authenticated owner", createExpense),
+		function("create_expenses", "Atomically create 2 to 10 independent expenses for the authenticated owner", object(
+			map[string]any{"expenses": map[string]any{"type": "array", "minItems": 2, "maxItems": 10, "items": createExpense}},
+			"expenses",
 		)),
 		function("list_expenses", "Read only the authenticated owner's expenses before answering or changing them. For 'last/latest expense', use only order=created_at_desc and limit=1 without filters", object(
 			map[string]any{

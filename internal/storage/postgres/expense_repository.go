@@ -44,6 +44,49 @@ func (r *ExpenseRepository) Create(ctx context.Context, input expense.NewExpense
 	return created, nil
 }
 
+func (r *ExpenseRepository) CreateMany(ctx context.Context, inputs []expense.NewExpense) ([]expense.Expense, error) {
+	if len(inputs) < 2 || len(inputs) > 10 {
+		return nil, errors.New("batch expense creation requires between 2 and 10 items")
+	}
+	owners := make(map[int64]struct{}, len(inputs))
+	for _, input := range inputs {
+		owners[input.UserID] = struct{}{}
+	}
+	for ownerID := range owners {
+		if err := ensureUser(ctx, r.db, ownerID); err != nil {
+			return nil, err
+		}
+	}
+	values := make([]string, 0, len(inputs))
+	arguments := make([]any, 0, len(inputs)*5)
+	for _, input := range inputs {
+		arguments = append(arguments, input.UserID, input.Amount.String(), input.Category, input.SpentAt.String(), input.Comment)
+		base := len(arguments) - 4
+		values = append(values, fmt.Sprintf("($%d, $%d::numeric, $%d, $%d::date, $%d)", base, base+1, base+2, base+3, base+4))
+	}
+	rows, err := r.db.Query(ctx, `INSERT INTO expenses (user_id, amount, category, spent_at, comment) VALUES `+
+		strings.Join(values, ", ")+` RETURNING `+expenseColumns, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("insert expense batch: %w", err)
+	}
+	defer rows.Close()
+	created := make([]expense.Expense, 0, len(inputs))
+	for rows.Next() {
+		item, err := scanExpense(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan created expense batch: %w", err)
+		}
+		created = append(created, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate created expense batch: %w", err)
+	}
+	if len(created) != len(inputs) {
+		return nil, fmt.Errorf("insert expense batch returned %d rows, want %d", len(created), len(inputs))
+	}
+	return created, nil
+}
+
 func (r *ExpenseRepository) Get(ctx context.Context, scope expense.Scope, id int64) (expense.Expense, error) {
 	conditions, arguments := scopeConditions(scope, id)
 	item, err := scanExpense(r.db.QueryRow(ctx, `SELECT `+expenseColumns+` FROM expenses WHERE `+strings.Join(conditions, " AND "), arguments...))

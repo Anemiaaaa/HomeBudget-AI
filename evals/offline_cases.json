@@ -1,5 +1,16 @@
 [
   {
+    "id": "E00",
+    "steps": [
+      {
+        "input": "/start",
+        "total_count": 0,
+        "reply_contains": ["HomeBudget", "кофе 350", "только свои расходы"]
+      }
+    ],
+    "owner_expenses": []
+  },
+  {
     "id": "E01",
     "steps": [
       {
@@ -139,11 +150,14 @@
           {"id": "c1", "name": "create_expense", "arguments": {"amount": "100", "category": "food", "spent_at": "сегодня", "comment": "кофе"}},
           {"id": "c2", "name": "create_expense", "arguments": {"amount": "200", "category": "transport", "spent_at": "сегодня", "comment": "такси"}}
         ]}],
-        "total_count": 0,
-        "reply_contains": ["только один расход"]
+        "total_count": 2,
+        "reply_contains": ["Добавлено расходов: 2", "100,00 ₽", "200,00 ₽"]
       }
     ],
-    "owner_expenses": []
+    "owner_expenses": [
+      {"amount": "100.00", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"},
+      {"amount": "200.00", "category": "transport", "spent_at": "2026-10-15", "comment": "такси"}
+    ]
   },
   {
     "id": "E26",

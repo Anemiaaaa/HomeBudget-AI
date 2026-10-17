@@ -29,7 +29,7 @@ func TestChatRetriesAndDecodesToolCall(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Model != "test-model" || len(body.Messages) != 2 || len(body.Tools) != 6 || body.MaxTokens != 800 {
+		if body.Model != "test-model" || len(body.Messages) != 2 || len(body.Tools) != 7 || body.MaxTokens != 800 {
 			t.Errorf("chat request = %+v", body)
 		}
 		writer.Header().Set("Content-Type", "application/json")

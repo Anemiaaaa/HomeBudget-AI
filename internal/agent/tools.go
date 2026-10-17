@@ -26,6 +26,7 @@ var (
 
 type OwnerExpenses interface {
 	Create(context.Context, int64, expense.CreateFields, expense.Date) (expense.Expense, error)
+	CreateMany(context.Context, int64, []expense.CreateFields, expense.Date) ([]expense.Expense, error)
 	Get(context.Context, int64, int64) (expense.Expense, error)
 	List(context.Context, int64, expense.ListFilter) (expense.ListResult, error)
 	Summary(context.Context, int64, expense.ListFilter) (expense.Summary, error)
@@ -79,6 +80,8 @@ func (e *Executor) Execute(ctx context.Context, turn *Turn, call Call) (Result, 
 	switch call.Name {
 	case "create_expense":
 		return e.create(ctx, turn, call.Arguments)
+	case "create_expenses":
+		return e.createMany(ctx, turn, call.Arguments)
 	case "list_expenses":
 		return e.list(ctx, turn, call.Arguments)
 	case "summarize_expenses":
@@ -114,6 +117,41 @@ func (e *Executor) create(ctx context.Context, turn *Turn, raw json.RawMessage) 
 	}
 	turn.Finished = true
 	return Result{Name: "create_expense", Payload: toExpense(created), Mutated: true, StopsTurn: true}, nil
+}
+
+type createManyArgs struct {
+	Expenses []createArgs `json:"expenses"`
+}
+
+type createManyPayload struct {
+	Items []expensePayload `json:"items"`
+	Count int              `json:"count"`
+}
+
+func (e *Executor) createMany(ctx context.Context, turn *Turn, raw json.RawMessage) (Result, error) {
+	var args createManyArgs
+	if err := decodeArguments(raw, &args); err != nil {
+		return Result{}, err
+	}
+	if len(args.Expenses) < 2 || len(args.Expenses) > 10 {
+		return Result{}, invalid("expenses must contain between 2 and 10 items")
+	}
+	fields := make([]expense.CreateFields, 0, len(args.Expenses))
+	for _, item := range args.Expenses {
+		fields = append(fields, expense.CreateFields{
+			Amount: item.Amount, Category: item.Category, SpentAt: item.SpentAt, Comment: item.Comment,
+		})
+	}
+	created, err := e.expenses.CreateMany(ctx, turn.OwnerID, fields, turn.ReferenceDate)
+	if err != nil {
+		return Result{}, err
+	}
+	items := make([]expensePayload, 0, len(created))
+	for _, item := range created {
+		items = append(items, toExpense(item))
+	}
+	turn.Finished = true
+	return Result{Name: "create_expenses", Payload: createManyPayload{Items: items, Count: len(items)}, Mutated: true, StopsTurn: true}, nil
 }
 
 type listArgs struct {

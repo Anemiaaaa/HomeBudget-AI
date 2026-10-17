@@ -3,6 +3,7 @@ package expense
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -24,6 +25,29 @@ func (s *AdminService) Create(ctx context.Context, input CreateInput, reference 
 
 func (s *OwnerService) Create(ctx context.Context, ownerID int64, input CreateFields, reference Date) (Expense, error) {
 	return create(ctx, s.repository, ownerID, input, reference)
+}
+
+func (s *OwnerService) CreateMany(ctx context.Context, ownerID int64, inputs []CreateFields, reference Date) ([]Expense, error) {
+	if len(inputs) < 2 || len(inputs) > 10 {
+		return nil, validation("expenses", "must contain between 2 and 10 items")
+	}
+	commands := make([]NewExpense, 0, len(inputs))
+	for index, input := range inputs {
+		command, err := validateCreate(ownerID, input, reference)
+		if err != nil {
+			var validationError *ValidationError
+			if errors.As(err, &validationError) {
+				fields := make(map[string]string, len(validationError.Fields))
+				for field, message := range validationError.Fields {
+					fields[fmt.Sprintf("expenses[%d].%s", index, field)] = message
+				}
+				return nil, &ValidationError{Fields: fields}
+			}
+			return nil, err
+		}
+		commands = append(commands, command)
+	}
+	return s.repository.CreateMany(ctx, commands)
 }
 
 func create(ctx context.Context, repository Repository, userID int64, input CreateFields, reference Date) (Expense, error) {

@@ -141,6 +141,7 @@ type Summary struct {
 
 type Repository interface {
 	Create(context.Context, NewExpense) (Expense, error)
+	CreateMany(context.Context, []NewExpense) ([]Expense, error)
 	Get(context.Context, Scope, int64) (Expense, error)
 	List(context.Context, ListFilter) (ListResult, error)
 	Summary(context.Context, ListFilter) (Summary, error)

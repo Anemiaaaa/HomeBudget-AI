@@ -141,8 +141,14 @@
     "steps": [{"input": "запиши кофе за 0 рублей", "count_a": 0, "count_b": 0, "max_tool_calls": 6}]
   },
   {
-    "id": "E21", "intent": "multiple_actions", "reference_date": "2026-10-15",
-    "steps": [{"input": "кофе 100 и такси 200", "count_a": 0, "count_b": 0, "reply_contains": ["один расход"], "max_tool_calls": 2}]
+    "id": "E21", "intent": "batch_create", "reference_date": "2026-10-15",
+    "steps": [{
+      "input": "кофе 100 и такси 200", "count_a": 2, "count_b": 0, "pending": "none", "reply_contains": ["Добавлено расходов: 2", "100,00 ₽", "200,00 ₽"], "max_tool_calls": 1,
+      "expenses_a": [
+        {"amount": "100.00", "category": "food", "spent_at": "2026-10-15", "comment": "кофе"},
+        {"amount": "200.00", "category": "transport", "spent_at": "2026-10-15", "comment": "такси"}
+      ]
+    }]
   },
   {
     "id": "E22", "intent": "date_boundary", "reference_date": "2027-01-01",

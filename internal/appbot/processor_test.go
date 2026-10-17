@@ -105,13 +105,14 @@ func TestNormalizeTerminalCallAsksForMissingAmount(t *testing.T) {
 	}
 }
 
-func TestNormalizeTerminalCallRepairsCompositeClarification(t *testing.T) {
+func TestNormalizeToolCallsCombinesMultipleCreates(t *testing.T) {
 	t.Parallel()
-	call := normalizeToolCall("кофе 100 и такси 200", nil, llm.ToolCall{
-		Name: "ask_clarification", Arguments: []byte(`{"kind":"clarify_create","question":"Что добавить?","draft":{"comment":"кофе"}}`),
+	calls := normalizeToolCalls("кофе 100 и такси 200", []llm.ToolCall{
+		{ID: "first", Name: "create_expense", Arguments: []byte(`{"amount":"100","category":"food","spent_at":"сегодня","comment":"кофе"}`)},
+		{ID: "second", Name: "create_expense", Arguments: []byte(`{"amount":"200","category":"transport","spent_at":"сегодня","comment":"такси"}`)},
 	})
-	if !strings.Contains(string(call.Arguments), "один расход") || !strings.Contains(string(call.Arguments), "original_request") {
-		t.Fatalf("normalized call arguments = %s", call.Arguments)
+	if len(calls) != 1 || calls[0].Name != "create_expenses" || !strings.Contains(string(calls[0].Arguments), `"expenses"`) {
+		t.Fatalf("normalized calls = %+v", calls)
 	}
 }
 

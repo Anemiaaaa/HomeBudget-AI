@@ -123,7 +123,7 @@ func TestProcessorCreateDeleteConfirmationAndDelivery(t *testing.T) {
 	if err := processor.DeliverOne(ctx); err != nil {
 		t.Fatalf("DeliverOne(delete) error = %v", err)
 	}
-	if len(sender.messages) != 3 || sender.messages[2] != "Расход №1 удалён." {
+	if len(sender.messages) != 3 || !strings.Contains(sender.messages[2], "Расход №1 удалён.") {
 		t.Fatalf("sent messages = %v", sender.messages)
 	}
 
@@ -303,18 +303,20 @@ func TestProcessorCreateDeleteConfirmationAndDelivery(t *testing.T) {
 		t.Fatalf("summary fallback update = %+v, %v", summaryFallback, err)
 	}
 
-	provider.responses = append(provider.responses, llm.ChatResponse{})
+	provider.responses = append(provider.responses, llm.ChatResponse{ToolCalls: []llm.ToolCall{
+		{ID: "batch_1", Name: "create_expenses", Arguments: json.RawMessage(`{"expenses":[{"amount":"100","category":"food","spent_at":"2026-10-15","comment":"кофе"},{"amount":"200","category":"transport","spent_at":"2026-10-15","comment":"такси"}]}`)},
+	}})
 	ingestMessage(t, ctx, store, 14, 101, 501, "кофе 100 и такси 200", "2026-10-15")
 	if err := processor.ProcessOne(ctx); err != nil {
-		t.Fatalf("ProcessOne(composite fallback) error = %v", err)
+		t.Fatalf("ProcessOne(batch create) error = %v", err)
 	}
-	compositeFallback, err := store.Get(ctx, 14)
-	if err != nil || compositeFallback.ReplyText == nil || !strings.Contains(*compositeFallback.ReplyText, "один расход") {
-		t.Fatalf("composite fallback update = %+v, %v", compositeFallback, err)
+	batchCreated, err := store.Get(ctx, 14)
+	if err != nil || batchCreated.ReplyText == nil || !strings.Contains(*batchCreated.ReplyText, "Добавлено расходов: 2") {
+		t.Fatalf("batch create update = %+v, %v", batchCreated, err)
 	}
 	session, err = store.LoadSession(ctx, 101, 501)
-	if err != nil || !strings.Contains(string(session.PendingAction), "clarify_request") {
-		t.Fatalf("composite fallback session = %+v, %v", session, err)
+	if err != nil || session.PendingAction != nil {
+		t.Fatalf("batch create session = %+v, %v", session, err)
 	}
 }
 

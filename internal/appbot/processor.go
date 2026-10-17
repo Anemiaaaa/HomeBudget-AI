@@ -24,7 +24,7 @@ type Provider interface {
 	Chat(context.Context, llm.ChatRequest) (llm.ChatResponse, error)
 }
 
-const PromptVersion = "2026-10-17.5"
+const PromptVersion = "2026-10-17.6"
 
 var amountPattern = regexp.MustCompile(`\d+(?:[.,]\d{1,2})?`)
 
@@ -171,6 +171,7 @@ func (p *Processor) runAgent(ctx context.Context, update bot.Update, activePendi
 			}
 			return p.completeAgentMessage(ctx, update.UpdateID, "clarification_required", "Уточните, что нужно сделать с расходами.", nil, clearPending)
 		}
+		response.ToolCalls = normalizeToolCalls(*update.Text, response.ToolCalls)
 		toolCalls += len(response.ToolCalls)
 		if toolCalls > p.maxToolCalls {
 			return p.completeAgentMessage(ctx, update.UpdateID, "tool_limit", "Запрос слишком сложный. Разделите его на несколько сообщений.", nil, clearPending)
@@ -515,7 +516,7 @@ func terminalCount(calls []llm.ToolCall) int {
 }
 
 func isTerminal(name string) bool {
-	return name == "create_expense" || name == "update_expense" || name == "delete_expense" || name == "ask_clarification"
+	return name == "create_expense" || name == "create_expenses" || name == "update_expense" || name == "delete_expense" || name == "ask_clarification"
 }
 
 func contextSize(messages []llm.Message, definitions []agent.Definition) int {
@@ -529,11 +530,12 @@ func contextSize(messages []llm.Message, definitions []agent.Definition) int {
 func systemPrompt(referenceDate string) string {
 	return `Ты управляешь личными расходами через tools. Текущая дата: ` + referenceDate + `.
 Всегда читай запись перед изменением или удалением. Не передавай user_id: владелец задан сервером.
-За один ход разрешена одна мутация. Для неполного или неоднозначного запроса используй ask_clarification.
+За один ход разрешена одна терминальная операция. Для неполного или неоднозначного запроса используй ask_clarification.
 Если в новом расходе не указана дата, используй текущую дату; не спрашивай дату дополнительно. Категорию выводи из смысла, уточняй только действительно отсутствующую сумму.
 Периоды передавай в date_from/date_to как YYYY-MM-DD. «За неделю» означает последние 7 календарных дней включительно: от текущей даты минус 6 дней до текущей даты.
 Если в запросе общей суммы период не указан, считай расходы за всё время и не уточняй период.
-Если пользователь просит создать или изменить несколько расходов одним сообщением, не выполняй ни один: попроси прислать один расход отдельным сообщением и явно скажи «один расход».
+Если пользователь перечисляет от 2 до 10 новых расходов, вызови create_expenses один раз и передай все позиции. Не вызывай несколько create_expense в одном ответе.
+Изменять или удалять можно только один расход за сообщение. Массовое изменение и удаление запрещены: попроси разделить запрос.
 Для «последнее» или «последний» читай только list_expenses с order=created_at_desc и limit=1, без других фильтров, затем изменяй ровно полученную запись и не проси выбирать её повторно.
 В draft для clarify_create сохраняй известные поля расхода; для clarify_request — original_request; для choose_target — intent и patch при обновлении.
 delete_expense только готовит подтверждение. Не утверждай, что данные изменены, без успешного tool result.
@@ -549,16 +551,6 @@ func normalizeToolCall(input string, turn *agent.Turn, call llm.ToolCall) llm.To
 	if call.Name == "ask_clarification" && isAllTimeSummaryRequest(input) {
 		call.Name = "summarize_expenses"
 		call.Arguments = json.RawMessage(`{}`)
-		return call
-	}
-	if call.Name == "ask_clarification" && isCompositeExpenseRequest(input) {
-		encoded, err := json.Marshal(map[string]any{
-			"kind": "clarify_request", "question": "Пришлите один расход отдельным сообщением.",
-			"draft": map[string]string{"original_request": input},
-		})
-		if err == nil {
-			call.Arguments = encoded
-		}
 		return call
 	}
 	if call.Name == "create_expense" {
@@ -669,6 +661,24 @@ func normalizeToolCall(input string, turn *agent.Turn, call llm.ToolCall) llm.To
 	return call
 }
 
+func normalizeToolCalls(input string, calls []llm.ToolCall) []llm.ToolCall {
+	if len(calls) < 2 || len(calls) > 10 || !isCompositeExpenseRequest(input) {
+		return calls
+	}
+	expenses := make([]json.RawMessage, 0, len(calls))
+	for _, call := range calls {
+		if call.Name != "create_expense" || !json.Valid(call.Arguments) {
+			return calls
+		}
+		expenses = append(expenses, call.Arguments)
+	}
+	arguments, err := json.Marshal(map[string]any{"expenses": expenses})
+	if err != nil {
+		return calls
+	}
+	return []llm.ToolCall{{ID: calls[0].ID, Name: "create_expenses", Arguments: arguments}}
+}
+
 func (p *Processor) completeKnownRequest(ctx context.Context, update bot.Update, turn *agent.Turn, executor *agent.Executor, clearPending bool) (bool, error) {
 	if update.Text == nil {
 		return false, nil
@@ -685,17 +695,7 @@ func (p *Processor) completeKnownRequest(ctx context.Context, update bot.Update,
 		}
 		return true, p.completeAgentMessage(ctx, update.UpdateID, "summary_fallback", reply, payload, clearPending)
 	}
-	if !isCompositeExpenseRequest(input) {
-		return false, nil
-	}
-	arguments, err := json.Marshal(map[string]any{
-		"kind": "clarify_request", "question": "Пришлите один расход отдельным сообщением.",
-		"draft": map[string]string{"original_request": input},
-	})
-	if err != nil {
-		return true, err
-	}
-	return true, p.completeTool(ctx, update, turn, llm.ToolCall{Name: "ask_clarification", Arguments: arguments})
+	return false, nil
 }
 
 func isAllTimeSummaryRequest(input string) bool {
@@ -819,6 +819,19 @@ func resultAndReply(result agent.Result) (json.RawMessage, string, error) {
 		return nil, "", err
 	}
 	switch result.Name {
+	case "create_expenses":
+		var batch struct {
+			Items []expenseView `json:"items"`
+			Count int           `json:"count"`
+		}
+		if err := json.Unmarshal(payload, &batch); err != nil {
+			return nil, "", err
+		}
+		lines := []string{fmt.Sprintf("Добавлено расходов: %d.", batch.Count)}
+		for _, item := range batch.Items {
+			lines = append(lines, fmt.Sprintf("• %s — %s, %s, %s, №%s", title(item), rubles(item.Amount), categoryLabel(item.Category), displayDate(item.SpentAt), item.ID))
+		}
+		return payload, strings.Join(lines, "\n") + "\n\nДальше можно: «покажи траты за неделю».", nil
 	case "create_expense", "update_expense":
 		var item expenseView
 		if err := json.Unmarshal(payload, &item); err != nil {

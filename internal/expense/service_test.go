@@ -19,6 +19,19 @@ func (r *repositoryStub) Create(_ context.Context, input NewExpense) (Expense, e
 	return Expense{ID: 1, UserID: input.UserID, Amount: input.Amount, Category: input.Category, SpentAt: input.SpentAt, Comment: input.Comment, Version: 1}, nil
 }
 
+func (r *repositoryStub) CreateMany(ctx context.Context, inputs []NewExpense) ([]Expense, error) {
+	created := make([]Expense, 0, len(inputs))
+	for _, input := range inputs {
+		item, err := r.Create(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		item.ID = int64(len(created) + 1)
+		created = append(created, item)
+	}
+	return created, nil
+}
+
 func (r *repositoryStub) Get(_ context.Context, scope Scope, id int64) (Expense, error) {
 	r.getScope = scope
 	return Expense{ID: id, UserID: scopeOwner(scope), Version: 1}, nil
@@ -61,6 +74,31 @@ func TestAdminCreateNormalizesExpense(t *testing.T) {
 	}
 	if created.Amount.String() != "350.00" || created.SpentAt.String() != "2026-10-15" || created.Comment == nil || *created.Comment != "кофе" {
 		t.Fatalf("Create() = %+v", created)
+	}
+}
+
+func TestOwnerCreateManyValidatesWholeBatchBeforeWriting(t *testing.T) {
+	t.Parallel()
+	repository := &repositoryStub{}
+	service := NewOwnerService(repository)
+	reference := mustDate(t, "2026-10-15")
+
+	created, err := service.CreateMany(context.Background(), 101, []CreateFields{
+		{Amount: "100", Category: CategoryFood, SpentAt: "сегодня"},
+		{Amount: "200", Category: CategoryTransport, SpentAt: "вчера"},
+	}, reference)
+	if err != nil || len(created) != 2 || len(repository.created) != 2 {
+		t.Fatalf("CreateMany() = %+v, %v; repository writes = %d", created, err, len(repository.created))
+	}
+
+	repository.created = nil
+	_, err = service.CreateMany(context.Background(), 101, []CreateFields{
+		{Amount: "100", Category: CategoryFood, SpentAt: "сегодня"},
+		{Amount: "0", Category: CategoryTransport, SpentAt: "сегодня"},
+	}, reference)
+	assertValidationField(t, err, "expenses[1].amount")
+	if len(repository.created) != 0 {
+		t.Fatalf("invalid batch wrote %d expenses", len(repository.created))
 	}
 }
 
