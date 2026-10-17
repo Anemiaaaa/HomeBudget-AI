@@ -32,6 +32,7 @@ type Options struct {
 	Commit      string
 	Repeats     int
 	CasesPath   string
+	CaseIDs     []string
 	Provider    Provider
 }
 
@@ -143,6 +144,10 @@ func Run(ctx context.Context, options Options) (Report, error) {
 		return Report{}, errors.New("live eval options are incomplete")
 	}
 	cases, err := loadCases(options.CasesPath)
+	if err != nil {
+		return Report{}, err
+	}
+	cases, err = filterCases(cases, options.CaseIDs)
 	if err != nil {
 		return Report{}, err
 	}
@@ -349,6 +354,34 @@ func loadCases(path string) ([]caseSpec, error) {
 		}
 	}
 	return cases, nil
+}
+
+func filterCases(cases []caseSpec, rawIDs []string) ([]caseSpec, error) {
+	wanted := make(map[string]struct{})
+	for _, rawID := range rawIDs {
+		if id := strings.TrimSpace(rawID); id != "" {
+			wanted[id] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return cases, nil
+	}
+	selected := make([]caseSpec, 0, len(wanted))
+	for _, spec := range cases {
+		if _, exists := wanted[spec.ID]; exists {
+			selected = append(selected, spec)
+			delete(wanted, spec.ID)
+		}
+	}
+	if len(wanted) > 0 {
+		missing := make([]string, 0, len(wanted))
+		for id := range wanted {
+			missing = append(missing, id)
+		}
+		sort.Strings(missing)
+		return nil, fmt.Errorf("live eval cases not found: %s", strings.Join(missing, ", "))
+	}
+	return selected, nil
 }
 
 func resetDatabase(ctx context.Context, pool *pgxpool.Pool) error {

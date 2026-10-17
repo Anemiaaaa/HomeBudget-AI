@@ -53,6 +53,7 @@ func run() error {
 		Commit:      strings.TrimSpace(os.Getenv("LIVE_EVAL_COMMIT")),
 		Repeats:     repeats,
 		CasesPath:   valueOrDefault("LIVE_EVAL_CASES", "/app/evals/live_cases.json"),
+		CaseIDs:     strings.Split(os.Getenv("LIVE_EVAL_CASE_IDS"), ","),
 		Provider:    client,
 	})
 	encoded, err := json.MarshalIndent(report, "", "  ")

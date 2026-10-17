@@ -22,7 +22,7 @@ type Provider interface {
 	Chat(context.Context, llm.ChatRequest) (llm.ChatResponse, error)
 }
 
-const PromptVersion = "2026-10-17.1"
+const PromptVersion = "2026-10-17.2"
 
 type Store interface {
 	ClaimNext(context.Context) (bot.Update, error)
@@ -510,6 +510,9 @@ func systemPrompt(referenceDate string) string {
 	return `Ты управляешь личными расходами через tools. Текущая дата: ` + referenceDate + `.
 Всегда читай запись перед изменением или удалением. Не передавай user_id: владелец задан сервером.
 За один ход разрешена одна мутация. Для неполного или неоднозначного запроса используй ask_clarification.
+Если в новом расходе не указана дата, используй текущую дату; не спрашивай дату дополнительно. Категорию выводи из смысла, уточняй только действительно отсутствующую сумму.
+Периоды передавай в date_from/date_to как YYYY-MM-DD. «За неделю» означает последние 7 календарных дней включительно: от текущей даты минус 6 дней до текущей даты.
+Если пользователь просит создать или изменить несколько расходов одним сообщением, не выполняй ни один: попроси прислать один расход отдельным сообщением и явно скажи «один расход».
 В draft для clarify_create сохраняй известные поля расхода; для clarify_request — original_request; для choose_target — intent и patch при обновлении.
 delete_expense только готовит подтверждение. Не утверждай, что данные изменены, без успешного tool result.
 Категории: food, transport, housing, entertainment, health, shopping, other.`

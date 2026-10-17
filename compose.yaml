@@ -76,6 +76,7 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-30s}
       LIVE_EVAL_REPEATS: ${LIVE_EVAL_REPEATS:-3}
+      LIVE_EVAL_CASE_IDS: ${LIVE_EVAL_CASE_IDS:-}
       LIVE_EVAL_COMMIT: ${LIVE_EVAL_COMMIT:-unknown}
       LIVE_EVAL_REPORT: /app/evals/reports/latest.json
     volumes:
